@@ -42,7 +42,7 @@ class TrafficRepresentation(ABC):
         self.edge_index_movement_to_phase = []
         for phase in self.phases:
             junction_id, phase_idx = phase
-            state = traci.trafficlight.getCompleteRedYellowGreenDefinition(junction_id)[-1].phases[phase_idx].state
+            state = traci.trafficlight.getCompleteRedYellowGreenDefinition(junction_id)[1].phases[phase_idx].state
             movement_ids = [i for i, s in enumerate([*state]) if s == "G" or s == "g"]
             movements = [traci.trafficlight.getControlledLinks(junction_id)[movement_id][0][:-1]
                          for movement_id in movement_ids]
@@ -52,8 +52,8 @@ class TrafficRepresentation(ABC):
                                                           self.phases.index(phase)))
         self.edge_index_phase_to_movement = self.reverse_edge_index(self.edge_index_movement_to_phase)
         self.edge_index_phase_to_junction = [
-            (phase_idx, self.tls_junctions.index(junction_id))
-            for phase_idx, junction_id in enumerate([phase[0] for phase in self.phases])]
+            (self.phases.index((junction_id, phase)), self.tls_junctions.index(junction_id))
+            for junction_id, phase in self.phases]
         self.edge_index_junction_to_phase = self.reverse_edge_index(self.edge_index_phase_to_junction)
         self.edge_index_lane_to_downstream_movement = [
             (self.lanes.index(from_lane), self.movements.index((from_lane, junction_id, to_lane)))
@@ -68,7 +68,7 @@ class TrafficRepresentation(ABC):
         self.edge_index_phase_to_phase = []
         for junction_id in self.tls_junctions:
             phase_indices = [phase_idx for junction_idx, phase_idx in self.edge_index_junction_to_phase
-                             if self.junctions[junction_idx] == junction_id]
+                             if self.tls_junctions[junction_idx] == junction_id]
             edge_index_phase_to_phase = list(itertools.combinations(phase_indices, 2))
             edge_index_phase_to_phase += self.reverse_edge_index(edge_index_phase_to_phase)
             self.edge_index_phase_to_phase += edge_index_phase_to_phase
@@ -164,6 +164,7 @@ class HieraGLightTrafficRepresentation(TrafficRepresentation):
         data["phase"].x = self._get_phase_features()
         data["movement", "to", "phase"].edge_index = self.edge_index_to_tensor(self.edge_index_movement_to_phase)
         data["phase", "to", "phase"].edge_index = self.edge_index_to_tensor(self.edge_index_phase_to_phase)
+        data["junction", "to", "phase"].edge_index = self.edge_index_to_tensor(self.edge_index_junction_to_phase)
         return data
 
     def _get_lane_features(self):

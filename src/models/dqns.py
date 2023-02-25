@@ -36,13 +36,13 @@ class HieraGLightDQN(DQN):
             ("movement", "to", "phase"): PhaseDemandLayer()
         })
         self.phase_competition_layer = PhaseCompetitionLayer(hidden_dim)
+        self.apply(self._init_params)
 
-    def forward(self, x_dict: Dict[str, torch.Tensor], edge_index_dict: Dict[Tuple[str, str, str], torch.Tensor]):
+    def forward(self, x_dict: Dict[str, torch.Tensor], edge_index_dict: Dict[Tuple[str, str, str], torch.Tensor]) \
+            -> torch.Tensor:
         x_dict = self.movement_demand_layer(x_dict)
         x_dict.update(self.phase_demand_layer(x_dict, edge_index_dict))
-        out = self.phase_competition_layer(x_dict["phase"], edge_index_dict[("phase", "to", "phase")])
-        print(out.shape)
-        # TODO: phase-to-phase edge index not corrent yet
+        return self.phase_competition_layer(x_dict["phase"], edge_index_dict[("phase", "to", "phase")])
 
 
 class LitDQN(DQN):

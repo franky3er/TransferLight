@@ -1,10 +1,11 @@
-from typing import Dict, Union
+from typing import Dict
+from collections import defaultdict
 
 import torch
 from torch import nn
 from torch import Tensor
 from torch_geometric import nn as pyg_nn
-from torch_geometric.typing import Adj, NodeType, OptPairTensor
+from torch_geometric.typing import Adj, NodeType
 
 
 class HeteroModule(nn.Module):
@@ -17,6 +18,18 @@ class HeteroModule(nn.Module):
         for node_type, module in self.modules.items():
             x_dict[node_type] = module(x_dict[node_type])
         return x_dict
+
+
+class ArgmaxAggregation:
+
+    def __call__(self, x: Tensor, index: Tensor):
+        grouped = defaultdict(lambda: [])
+        for group, element in zip(index, x):
+            grouped[group.item()].append(element)
+        grouped = {group: torch.cat(elements) for group, elements in grouped.items()}
+        grouped = dict(sorted(grouped.items()))
+        argmax = torch.cat([torch.argmax(elements).unsqueeze(dim=0) for elements in grouped.values()])
+        return argmax
 
 
 class PhaseDemandLayer(pyg_nn.MessagePassing):

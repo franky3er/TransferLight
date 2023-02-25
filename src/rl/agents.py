@@ -7,13 +7,19 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 from torch_geometric.data import Data, HeteroData, Batch
+from torch_geometric.nn.aggr import MaxAggregation
 
 from src.data.replay_buffer import ReplayBuffer
 from src.models.dqns import LitDQN, HieraGLightDQN
+from src.models.modules import ArgmaxAggregation
 from src.params import ENV_ACTION_EXECUTION_TIME
 from src.rl.exploration import ExpDecayEpsGreedyStrategy, ConstantEpsGreedyStrategy
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+max_aggr = MaxAggregation()
+argmax_aggr = ArgmaxAggregation()
 
 
 class TscMarlAgent(ABC):
@@ -42,6 +48,7 @@ class HieraGLightAgent(TscMarlAgent):
         self.dqn_target = HieraGLightDQN(movement_dim, phase_dim, hidden_dim)
 
     def act(self, state: HeteroData) -> List[int]:
+        tls_index = state.edge_index_dict[("junction", "to", "phase")][0]
         q_locals = self.dqn_local(state.x_dict, state.edge_index_dict)
 
     def train_step(self, state: Any, actions: List[int], rewards: torch.Tensor, next_state: Any, done: bool):
