@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="JupyterPersistentConnectionParameters">
+    <option name="knownRemoteServers">
+      <list>
+        <JupyterConnectionParameters>
+          <option name="authType" value="notebook" />
+          <option name="token" value="a08258de61957ac7e8462e299b8d74688920c5eff98e4c60" />
+          <option name="urlString" value="http://localhost:12345" />
+          <authParams2>
+            <map>
+              <entry key="token" value="a08258de61957ac7e8462e299b8d74688920c5eff98e4c60" />
+            </map>
+          </authParams2>
+        </JupyterConnectionParameters>
+        <JupyterConnectionParameters>
+          <option name="authType" value="notebook" />
+          <option name="urlString" value="http://localhost:8888" />
+          <authParams2>
+            <map />
+          </authParams2>
+        </JupyterConnectionParameters>
+      </list>
+    </option>
+    <option name="moduleParameters">
+      <map>
+        <entry key="$PROJECT_DIR$/../vqvae-vc/.idea/vqvae-vc.iml">
+          <value>
+            <JupyterConnectionParameters>
+              <option name="authType" value="notebook" />
+              <option name="token" value="a08258de61957ac7e8462e299b8d74688920c5eff98e4c60" />
+              <option name="urlString" value="http://localhost:12345" />
+              <authParams2>
+                <map>
+                  <entry key="token" value="a08258de61957ac7e8462e299b8d74688920c5eff98e4c60" />
+                </map>
+              </authParams2>
+            </JupyterConnectionParameters>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+</project>

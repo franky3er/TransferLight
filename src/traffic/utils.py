@@ -5,14 +5,26 @@ import numpy as np
 from sumolib.net.edge import Edge
 
 
-def sort_roads_clockwise(roads: List[Edge], switch_src_dest: bool = False) -> List[Edge]:
-    dest_coords = [np.array(list(road.getToNode().getCoord())) for road in roads]
-    src_coords = [np.array(list(road.getFromNode().getCoord())) for road in roads]
-    src_coords, dest_coords = (dest_coords, src_coords) if switch_src_dest else (src_coords, dest_coords)
-    twelve_pm = np.array([0.0, 1.0])
-    angles = [rotation_angle(twelve_pm, src_coord - dest_coord) for src_coord, dest_coord in
-              zip(src_coords, dest_coords)]
-    return [edge for _, edge in sorted(zip(angles, roads))]
+def angle_approach(approach: Edge, reference_vec: np.ndarray = np.array([0.0, 1.0]),
+                   switch_src_dest: bool = False):
+    dest_coord = np.array(list(approach.getToNode().getCoord()))
+    src_coord = np.array(list(approach.getFromNode().getCoord()))
+    src_coord, dest_coord = (dest_coord, src_coord) if switch_src_dest else (src_coord, dest_coord)
+    approach_vec = src_coord - dest_coord
+    return rotation_angle(reference_vec, approach_vec)
+
+def angle_between_approaches(approach_a: Edge, approach_b: Edge):
+    dest_coord_a = np.array(list(approach_a.getToNode().getCoord()))
+    src_coord_a = np.array(list(approach_a.getFromNode().getCoord()))
+    dest_coord_b = np.array(list(approach_b.getToNode().getCoord()))
+    src_coord_b = np.array(list(approach_b.getFromNode().getCoord()))
+    approach_a_vec = src_coord_a - dest_coord_a
+    approach_b_vec = src_coord_b - dest_coord_b
+    return rotation_angle(approach_a_vec, approach_b_vec)
+
+def sort_approaches_clockwise(approaches: List[Edge], switch_src_dest: bool = False) -> List[Edge]:
+    angles = [angle_approach(approach, switch_src_dest=switch_src_dest) for approach in approaches]
+    return [edge for _, edge in sorted(zip(angles, approaches))]
 
 
 def rotation_angle(a: np.ndarray, b: np.ndarray) -> float:

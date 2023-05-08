@@ -6,7 +6,7 @@ from torch.nn.init import orthogonal_
 from torch_geometric import nn as pyg_nn
 
 from src.models.dqn_heads import DuelingHead
-from src.models.modules import HeteroModule, PhaseDemandLayer, PhaseCompetitionLayer
+from src.models.modules import HeteroModule, SimpleConv, PhaseDemandLayer, PhaseCompetitionLayer
 
 
 class DQN(nn.Module):
@@ -21,34 +21,38 @@ class DQN(nn.Module):
 
 class HieraGLightDQN(DQN):
 
-    def __init__(self, movement_dim: int, phase_dim: int, hidden_dim: int):
+    def __init__(self, movement_dim: int, hidden_dim: int):
         super(HieraGLightDQN, self).__init__()
-        self.movement_demand_layer = HeteroModule({
-            "movement": nn.Sequential(
-                nn.Linear(in_features=movement_dim, out_features=hidden_dim),
-                nn.ReLU(inplace=True),
-                nn.Linear(in_features=hidden_dim, out_features=hidden_dim),
-                nn.ReLU(inplace=True)
-            )
-        })
-
+        self.movement_demand_layer = nn.Sequential(
+            nn.Linear(in_features=movement_dim, out_features=hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(in_features=hidden_dim, out_features=hidden_dim),
+            nn.ReLU(inplace=True)
+        )
         self.phase_demand_layer = pyg_nn.HeteroConv({
-            ("movement", "to", "phase"): PhaseDemandLayer()
+            ("movement", "to", "phase"): PhaseDemandLayer(hidden_dim, hidden_dim)
         })
-        self.phase_competition_layer = PhaseCompetitionLayer(hidden_dim)
+        self.dqn_head = nn.Sequential(
+            nn.Linear(in_features=hidden_dim, out_features=hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(in_features=hidden_dim, out_features=1)
+        )
+        #self.phase_competition_layer = PhaseCompetitionLayer(hidden_dim)
         self.apply(self._init_params)
 
     def forward(self, x_dict: Dict[str, torch.Tensor], edge_index_dict: Dict[Tuple[str, str, str], torch.Tensor]) \
             -> torch.Tensor:
-        x_dict = self.movement_demand_layer(x_dict)
-        x_dict.update(self.phase_demand_layer(x_dict, edge_index_dict))
-        return self.phase_competition_layer(x_dict["phase"], edge_index_dict[("phase", "to", "phase")])
+        x_dict["movement"] = self.movement_demand_layer(x_dict["movement"])
+        phase_demand = self.phase_demand_layer(x_dict, edge_index_dict)["phase"]
+        return self.dqn_head(phase_demand)
+
+        #return self.phase_competition_layer(x_dict["phase"], edge_index_dict[("phase", "to", "phase")])
 
 
-class LitDQN(DQN):
+class QNet(DQN):
 
     def __init__(self, state_size: int, hidden_size: int, action_size: int):
-        super(LitDQN, self).__init__()
+        super(QNet, self).__init__()
         self.state_embedding = nn.Sequential(
             nn.Linear(state_size, hidden_size),
             nn.ReLU(inplace=True),
