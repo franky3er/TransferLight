@@ -7,7 +7,7 @@ from torch import nn
 from torch.nn.init import orthogonal_
 from torch_geometric.data import HeteroData
 
-from src.models.modules import NodeAggregation
+from src.models.modules import NodeAggregation, FlexibleCategorical
 
 
 class ActorNetwork(nn.Module):
@@ -129,21 +129,41 @@ class GraphActorNetwork(ActorNetwork):
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(inplace=True)
         )
+        self.movement_to_phase_aggr = NodeAggregation(aggr_fn="mean")
         self.phase_embedding_layers = nn.Sequential(
-            nn.Linear(phase_dim, hidden_dim),
-            nn.ReLU(inplace=True)
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, 1)
         )
-        self.movement_to_phase_aggr = NodeAggregation()
+        self.movement_to_phase_aggr = NodeAggregation(aggr_fn="mean")
+        self.apply(self._init_params)
+        self.device = "cpu"
 
     def forward(self, state: HeteroData):
         x_dict = state.x_dict
         edge_index_dict = state.edge_index_dict
         movement_demand = self.movement_embedding_layers(x_dict["movement"])
-        self.movement_to_phase_aggr(movement_demand, edge_index_dict["movement", "to", "phase"])
-        return None
+        logits = self.phase_embedding_layers(
+            self.movement_to_phase_aggr(movement_demand, edge_index_dict["movement", "to", "phase"])).squeeze()
+        return logits
 
     def full_path(self, state: HeteroData):
+        x_dict = state.x_dict
+        edge_index_dict = state.edge_index_dict
         logits = self.forward(state)
+        index = edge_index_dict["phase", "to", "intersection"][1]
+        distribution = FlexibleCategorical(logits, index).to(self.device)
+        actions, action_indices = distribution.sample(return_sample_indices=True)
+        log_probs = distribution.log_prob(action_indices)
+        entropy = distribution.entropy()
+        return actions, log_probs, entropy
+
+    def to(self, device):
+        self.device = device
+        self.movement_to_phase_aggr.to(device)
+        return super(GraphActorNetwork, self).to(device)
 
 
 class GraphCriticNetwork(CriticNetwork):

@@ -13,7 +13,7 @@ from torch_geometric.nn.aggr import MaxAggregation
 from src.data.replay_buffer import ReplayBuffer
 from src.models.dqns import QNet, HieraGLightDQN
 from src.models.actor_critic import ActorNetwork, CriticNetwork
-from src.models.modules import ArgmaxAggregation, NumElementsAggregation
+from src.models.modules import FlexibleArgmax, NumElementsAggregation
 from src.params import ENV_ACTION_EXECUTION_TIME
 from src.rl.environments import TscMarlEnvironment, MultiprocessingTscMarlEnvironment
 from src.rl.exploration import ExpDecayEpsGreedyStrategy, ConstantEpsGreedyStrategy
@@ -23,7 +23,7 @@ print(f"Use {device} device")
 
 
 max_aggr = MaxAggregation()
-argmax_aggr = ArgmaxAggregation()
+argmax_aggr = FlexibleArgmax()
 num_elements_aggr = NumElementsAggregation()
 
 
@@ -381,12 +381,9 @@ class IA2CAgents(TscMarlAgent):
                 next_values = self.critic(next_states)
 
                 advantages = rewards + self.discount_factor * next_values - values
-                #print(f"rewards {rewards.shape},  advantages {advantages.shape},  entropy {entropy.shape},  values {values.shape}")
 
                 actor_loss = - torch.mean(log_prob_actions * advantages.detach() + self.entropy_weight * entropy)
-                #print(f"actor loss {actor_loss}")
                 critic_loss = torch.mean(advantages ** 2)
-                #print(f"critic loss {critic_loss}")
 
                 self.critic_optim.zero_grad()
                 self.actor_optim.zero_grad()

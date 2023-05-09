@@ -1,18 +1,22 @@
 import os
 
 import torch
+from torch import nn
+from torch_geometric import nn as pyg_nn
 
 from src.params import SCENARIOS_ROOT
 from src.rl.environments import TscMarlEnvironment, MultiprocessingTscMarlEnvironment
 from src.rl.agents import MaxPressureAgents, IQLAgents, HieraGLightAgent, IA2CAgents, RandomAgents
+from src.models.modules import FlexibleArgmax
 from src.params import DEVICE as device
 
 
 if __name__ == "__main__":
+
     scenarios_dir = os.path.join(SCENARIOS_ROOT, "grid", "1x1-500m", "train")
     traffic_representation = "HieraGLightTrafficRepresentation"
     #environment = TscMarlEnvironment(scenarios_dir, 180, "MaxPressureTrafficRepresentation", use_default=False, demo=False)
-    environment = MultiprocessingTscMarlEnvironment(scenarios_dir, 180, traffic_representation, 1)
+    environment = MultiprocessingTscMarlEnvironment(scenarios_dir, 180, traffic_representation, 2)
 
     model_params = {"state_size": 52, "hidden_size": 64, "action_size": 4}
     train_params = {"buffer_size": 1_000, "batch_size": 128, "learning_rate": 0.01, "discount_factor": 0.9,
