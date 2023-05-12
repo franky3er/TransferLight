@@ -220,7 +220,7 @@ class MaxPressureTrafficRepresentation(TrafficRepresentation):
         return pressures
 
     def get_rewards(self) -> torch.Tensor:
-        return - torch.tensor(self.get_intersection_level_metrics("normalized_pressure"))
+        return - torch.tensor(self.get_intersection_level_metrics("queue_length"))
 
 
 class LitTrafficRepresentation(TrafficRepresentation):

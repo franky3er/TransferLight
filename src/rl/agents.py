@@ -13,7 +13,7 @@ from torch_geometric.nn.aggr import MaxAggregation
 from src.data.replay_buffer import ReplayBuffer
 from src.models.dqns import QNet, HieraGLightDQN
 from src.models.actor_critic import ActorNetwork, CriticNetwork
-from src.models.modules import FlexibleArgmax, NumElementsAggregation
+from src.modules.utils import FlexibleArgmax, NumElementsAggregation
 from src.params import ENV_ACTION_EXECUTION_TIME
 from src.rl.environments import TscMarlEnvironment, MultiprocessingTscMarlEnvironment
 from src.rl.exploration import ExpDecayEpsGreedyStrategy, ConstantEpsGreedyStrategy
