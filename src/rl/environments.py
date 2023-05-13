@@ -185,7 +185,8 @@ class MultiprocessingTscMarlEnvironment(MarlEnvironment):
             states.append(state)
             rewards.append(rewards_)
             dones.append(done)
-        return self._batch_states(states), self._batch_rewards(rewards), self._batch_dones(dones)
+        states, rewards, done = self._batch_states(states), self._batch_rewards(rewards), self._batch_dones(dones)
+        return states, rewards, done
 
     def _distribute_actions(self, actions: List[int]) -> List[List[int]]:
         actions_ = [[] for _ in range(self.n_workers)]

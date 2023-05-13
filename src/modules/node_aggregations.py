@@ -17,7 +17,6 @@ class NodeAggregation(pyg_nn.MessagePassing):
 
     def __init__(self, aggr: str):
         super(NodeAggregation, self).__init__(aggr=aggr)
-        self.device = "cpu"
 
     @abstractmethod
     def forward(self, x: torch.Tensor, index: torch.LongTensor = None, edge_index: Adj = None) -> torch.Tensor:
@@ -29,8 +28,9 @@ class NodeAggregation(pyg_nn.MessagePassing):
                                  index: torch.LongTensor = None,
                                  edge_index: Adj = None) -> Tuple[torch.Tensor, Adj, int]:
         assert index is not None or edge_index is not None
+        device = x_src.get_device()
         if index is not None:
-            src_node_ids = torch.arange(0, index.size(0), device=self.device).unsqueeze(0)
+            src_node_ids = torch.arange(0, index.size(0), device=device).unsqueeze(0)
             dest_node_ids = index.unsqueeze(0)
             edge_index = torch.cat([src_node_ids, dest_node_ids], dim=0)
         offset = x_src.size(0)
@@ -40,14 +40,10 @@ class NodeAggregation(pyg_nn.MessagePassing):
         if x_dest is not None and x_dest.dim() == 1:
             x_dest = x_dest.repeat(n_dest_nodes, 1)
         else:
-            x_dest = torch.zeros(n_dest_nodes, dim_src_nodes, device=self.device)
+            x_dest = torch.zeros(n_dest_nodes, dim_src_nodes, device=device)
         x = torch.cat([x_src, x_dest], dim=0)
         edge_index[1] += n_src_nodes
         return x, edge_index, offset
-
-    def to(self, device):
-        self.device = device
-        return super(NodeAggregation, self).to(device)
 
 
 class SimpleNodeAggregation(NodeAggregation):

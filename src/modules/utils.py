@@ -25,6 +25,7 @@ class FlexibleArgmax(nn.Module):
     def forward(self, x: torch.Tensor, group_index: torch.Tensor, return_argmax_indices: bool = False,
                 keepdim: bool = True):
         assert x.size(0) == group_index.size(0)
+        x = x.squeeze()
         device = x.get_device()
         dtype = x.dtype
         n_items = x.size(0)

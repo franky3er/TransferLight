@@ -71,6 +71,7 @@ class TrafficRepresentation(ABC):
                     self.phase_movements[phase].append(movement)
                     self.phase_movement_params[(phase, movement)] = params
 
+
         # Edge Indices
         self.edge_index_intersection_to_intersection = [
             (self.intersections.index(edge.getFromNode().getID()), self.intersections.index(edge.getToNode().getID()))

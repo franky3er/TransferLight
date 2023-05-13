@@ -39,7 +39,7 @@ class FlexibleActorHead(ActorHead):
         self.layers = LinearStack(input_dim, hidden_dim, 1, n_layer, last_activation=False)
 
     def forward(self, x: torch.Tensor, index: torch.LongTensor):
-        return self.layers(x)
+        return self.layers(x).squeeze()
 
 
 class CriticHead(nn.Module):

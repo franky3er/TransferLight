@@ -56,10 +56,16 @@ class HeterogeneousTrafficEmbedding(TrafficEmbedding):
             phase_embedding["class_name"], phase_embedding["init_args"])
 
     def forward(self, state: HeteroData) -> Tuple[torch.Tensor, torch.LongTensor]:
-        x_movement = state
+        movement_embedding = self.movement_embedding(state["movement"].x,
+                                                     None)
+        phase_embedding = self.movement_to_phase_aggregation(movement_embedding,
+                                                             state["movement", "to", "phase"].edge_index)
+        x = self.phase_embedding(phase_embedding, state["phase", "to", "phase"].edge_index)
+        index = state["phase", "to", "intersection"].edge_index[1]
+        return x, index
 
 
-class MovementEmbedding(nn.Module):
+class MovementEmbedding(pyg_nn.MessagePassing):
 
     @classmethod
     def create(cls, class_name: str, init_args: Dict):
@@ -105,25 +111,27 @@ class SimpleMovementToPhaseAggregation(MovementToPhaseAggregation):
 
     def forward(self, x: NodeType, edge_index: Adj):
         x, edge_index, offset = self._update_x_and_edge_index(x, edge_index)
-        x = self.propagate(x, edge_index)
+        x = self.propagate(edge_index, x=x)
         return x[offset:]
 
     def _update_x_and_edge_index(self, x_src: torch.Tensor, edge_index: Adj) -> Tuple[torch.Tensor, Adj, int]:
+        device = x_src.get_device()
         offset = x_src.size(0)
         n_src_nodes = x_src.size(0)
         n_dest_nodes = torch.max(edge_index[1]) + 1
         dim_src_nodes = x_src.size(1)
-        x_dest = torch.zeros(n_dest_nodes, dim_src_nodes, device=self.device)
+        x_dest = torch.zeros(n_dest_nodes, dim_src_nodes, device=device)
         x = torch.cat([x_src, x_dest], dim=0)
-        edge_index[1] += n_src_nodes
-        return x, edge_index, offset
+        new_edge_index = edge_index.clone()
+        new_edge_index[1] += n_src_nodes
+        return x, new_edge_index, offset
 
     def to(self, device):
         self.device = device
         return super(SimpleMovementToPhaseAggregation, self).to(device)
 
 
-class PhaseEmbedding(nn.Module):
+class PhaseEmbedding(pyg_nn.MessagePassing):
 
     @classmethod
     def create(cls, class_name: str, init_args: Dict):
@@ -144,6 +152,37 @@ class LinearPhaseEmbedding(PhaseEmbedding):
 
     def forward(self, x: NodeType, edge_index: Adj):
         return self.layers(x)
+
+
+class CompetitionPhaseEmbedding(PhaseEmbedding):
+
+    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
+        super(CompetitionPhaseEmbedding, self).__init__(aggr="mean")
+        self.linear_layer_neighbor = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(inplace=True)
+        )
+        self.linear_layer_target = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(inplace=True)
+        )
+        self.linear_layer_out = nn.Sequential(
+            nn.Linear(2*hidden_dim, output_dim),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x: NodeType, edge_index: Adj):
+        neighbor = self.linear_layer_neighbor(x)
+        target = self.linear_layer_target(x)
+        return self.propagate(edge_index, target=target, neighbor=neighbor)
+
+    def message(self, neighbor_j: torch.Tensor) -> torch.Tensor:
+        return neighbor_j
+
+    def update(self, message: torch.Tensor, target: torch.Tensor):
+        concatenated = torch.cat([target, message], dim=1)
+        out = self.linear_layer_out(concatenated)
+        return out
 
 
 class IntersectionEmbedding(nn.Module):
