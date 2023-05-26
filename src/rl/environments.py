@@ -57,7 +57,8 @@ class TscMarlEnvironment(MarlEnvironment):
         self.close()
         self.current_step = 0
         net_xml_path, rou_xml_path = next(self.scenarios)
-        traci.start([self.sumo, "-n", net_xml_path, "-r", rou_xml_path, "--time-to-teleport", str(-1), "--no-warnings"])
+        sumo_cmd = [self.sumo, "-n", net_xml_path, "-r", rou_xml_path, "--time-to-teleport", str(-1), "--no-warnings"]
+        traci.start(sumo_cmd)
         self.net = sumolib.net.readNet(net_xml_path)
         if not self.use_default:
             for tls in self.net.getTrafficLights():
@@ -103,6 +104,7 @@ class TscMarlEnvironment(MarlEnvironment):
             traci.simulationStep()
 
     def _apply_controlled_actions(self, actions: List[int]):
+        actions = [actions] if isinstance(actions, int) else actions
         previous_actions = self.traffic_representation.get_current_phases()
         tls_junctions = self.traffic_representation.get_signalized_intersections()
         transition_signals = [self._get_transition_signals(junction_id, prev_action, action)

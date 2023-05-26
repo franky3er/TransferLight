@@ -28,9 +28,6 @@ class TrafficRepresentation(ABC):
                                          if net.getNode(junction_id).getType() == "traffic_light"]
         self.roads = [road.getID() for road in net.getEdges()]
         self.lanes = [lane.getID() for road_id in self.roads for lane in net.getEdge(road_id).getLanes()]
-        #self.movements = [
-        #    (connection.getFromLane().getID(), intersection_id, connection.getToLane().getID())
-        #    for intersection_id in self.intersections for connection in net.getNode(intersection_id).getConnections()]
         self.movements = defaultdict(lambda: [])
         for intersection_id in self.intersections:
             connections = sorted(net.getNode(intersection_id).getConnections(),
@@ -59,7 +56,9 @@ class TrafficRepresentation(ABC):
             phase = logic.phases[phase_idx]
             state = phase.state
             for i, s in [(i, s) for i, s in enumerate([*state]) if s == "G" or s == "g"]:
-                incoming_lane_id, outgoing_lane_id, _ = traci.trafficlight.getControlledLinks(intersection_id)[i][0]
+                controlled_links = traci.trafficlight.getControlledLinks(intersection_id)
+                controlled_links = controlled_links[i]
+                incoming_lane_id, outgoing_lane_id, _ = controlled_links[0]
                 incoming_lane, outgoing_lane = net.getLane(incoming_lane_id), net.getLane(outgoing_lane_id)
                 incoming_approach_id, outgoing_approach_id = incoming_lane.getEdge().getID(), \
                     outgoing_lane.getEdge().getID()
@@ -201,27 +200,26 @@ class TrafficRepresentation(ABC):
 
 class MaxPressureTrafficRepresentation(TrafficRepresentation):
 
-    def get_state(self) -> List[List[int]]:
-        pressures = []
-        for intersection_id in self.signalized_intersections:
-            intersection_pressures = []
-            for phase, movements in [(phase, movements) for phase, movements in self.phase_movements.items()
-                                     if phase[0] == intersection_id]:
-                upstream_veh = 0
-                downstream_veh = 0
-                for movement in movements:
-                    incoming_approach_id, _, outgoing_approach_id = movement
-                    incoming_approach_veh = traci.edge.getLastStepVehicleNumber(incoming_approach_id)
-                    outgoing_approach_veh = traci.edge.getLastStepVehicleNumber(outgoing_approach_id)
-                    upstream_veh += incoming_approach_veh
-                    downstream_veh += outgoing_approach_veh
-                phase_pressure = upstream_veh - downstream_veh
-                intersection_pressures.append(phase_pressure)
-            pressures.append(intersection_pressures)
-        return pressures
+    def get_state(self) -> HeteroData:
+        data = HeteroData()
+        x = []
+        for phase, movements in self.phase_movements.items():
+            incoming_lanes = set(incoming_lane for movement in movements
+                                 for incoming_lane, _, _ in self.movements[movement])
+            outgoing_lanes = set(outgoing_lane for movement in movements
+                                 for _, _, outgoing_lane in self.movements[movement])
+            incoming_lanes_veh = sum([traci.lane.getLastStepHaltingNumber(lane_id) for lane_id in incoming_lanes])
+            outgoing_lanes_veh = sum([traci.lane.getLastStepHaltingNumber(lane_id) for lane_id in outgoing_lanes])
+            phase_pressure = float(incoming_lanes_veh) - float(outgoing_lanes_veh)
+            x.append([phase_pressure])
+        data["phase"].x = torch.tensor(x)
+        data["intersection"].x = torch.zeros(len(self.signalized_intersections), 1)
+        data["phase", "to", "intersection"].edge_index = self.edge_index_to_tensor(
+            self.edge_index_phase_to_intersection)
+        return data
 
     def get_rewards(self) -> torch.Tensor:
-        return - torch.tensor(self.get_intersection_level_metrics("queue_length"))
+        return - torch.tensor(self.get_intersection_level_metrics("normalized_pressure"))
 
 
 class LitTrafficRepresentation(TrafficRepresentation):
@@ -383,12 +381,17 @@ class HieraGLightTrafficRepresentation(TrafficRepresentation):
             else:
                 movement_allowed = True
                 movement_protected = True
+            len_incoming_approach = self.net.getEdge(incoming_approach_id).getLength() / 1_000
+            len_outgoing_approach = self.net.getEdge(outgoing_approach_id).getLength() / 1_000
             incoming_lanes = list({incoming_lane_id for incoming_lane_id, _, _ in self.movements[movement]})
             outgoing_lanes = list({outgoing_lane_id for _, _, outgoing_lane_id in self.movements[movement]})
+            n_incoming_lanes = len(incoming_lanes) / 4
+            n_outgoing_lanes = len(outgoing_lanes) / 4
             incoming_segments_vehicle_density = self._get_vehicle_density(incoming_lanes, self.n_segments)
             outgoing_approach_vehicle_density = self._get_vehicle_density(outgoing_lanes)
             x_movement = [float(movement_allowed)] + [float(movement_protected)] + incoming_segments_vehicle_density + \
-                         [outgoing_approach_vehicle_density]
+                         [outgoing_approach_vehicle_density] + [len_incoming_approach] + [len_outgoing_approach] + \
+                         [n_incoming_lanes] + [n_outgoing_lanes]
             x.append(x_movement)
         return torch.tensor(x)
 

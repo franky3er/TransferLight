@@ -164,27 +164,24 @@ class MaxPressureAgents(TscMarlAgent):
         super(MaxPressureAgents, self).__init__()
         self.min_phase_steps = min_phase_duration // ENV_ACTION_EXECUTION_TIME
         self.initialized = False
-        self.phases = []
-        self.phase_durations = []
+        self.actions = None
+        self.action_durations = None
+        self._argmax = FlexibleArgmax()
 
-    def act(self, state: List[List[int]]) -> List[int]:
-        actions = []
-        for i, pressures in enumerate(state):
-            max_pressure_phase = np.argmax(pressures)
-            if not self.initialized:
-                actions.append(max_pressure_phase)
-                self.phases.append(max_pressure_phase)
-                self.phase_durations.append(0)
-            else:
-                if self.phase_durations[i] < self.min_phase_steps or self.phases[i] == max_pressure_phase:
-                    actions.append(self.phases[i])
-                    self.phase_durations[i] += 1
-                else:
-                    actions.append(max_pressure_phase)
-                    self.phases[i] = max_pressure_phase
-                    self.phase_durations[i] = 0
-        self.initialized = True
-        return actions
+    def act(self, state: HeteroData) -> List[int]:
+        x = state["phase"].x.squeeze().to(device)
+        index = state["phase", "to", "intersection"].edge_index[1].to(device)
+        max_pressure_actions = self._argmax(x, index)
+        if self.initialized:
+            action_change = torch.logical_and(self.action_durations >= self.min_phase_steps,
+                                              self.actions != max_pressure_actions)
+            self.actions = action_change * max_pressure_actions + ~action_change * self.actions
+            self.action_durations = torch.zeros_like(self.actions) + ~action_change * (self.action_durations + 1)
+        else:
+            self.actions = max_pressure_actions
+            self.action_durations = torch.zeros_like(self.actions)
+            self.initialized = True
+        return self.actions.cpu().numpy().tolist()
 
     def train(self, environment: TscMarlEnvironment, episodes: int = 100):
         for i in range(episodes):
@@ -198,6 +195,9 @@ class MaxPressureAgents(TscMarlAgent):
                 if done:
                     avg_episode_reward = torch.mean(torch.tensor(episode_rewards))
                     print(f"--- Epoch: {i}   Reward: {avg_episode_reward} ---")
+                    self.phases = []
+                    self.action_durations = []
+                    self.initialized = False
                     break
         environment.close()
 
