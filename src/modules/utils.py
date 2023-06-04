@@ -20,12 +20,24 @@ class HeteroModule(nn.Module):
         return x_dict
 
 
+class MultiInputSequential(nn.Sequential):
+
+    def forward(self, inputs):
+        for module in self._modules.values():
+            if type(inputs) == tuple:
+                inputs = module(*inputs)
+            else:
+                inputs = module(inputs)
+        return inputs
+
+
 class FlexibleArgmax(nn.Module):
 
-    def forward(self, x: torch.Tensor, group_index: torch.Tensor, return_argmax_indices: bool = False,
+    @staticmethod
+    def forward(x: torch.Tensor, group_index: torch.Tensor, return_argmax_indices: bool = False,
                 keepdim: bool = True):
-        assert x.size(0) == group_index.size(0)
         x = x.squeeze()
+        assert x.size(0) == group_index.size(0)
         device = x.get_device()
         dtype = x.dtype
         n_items = x.size(0)
@@ -45,6 +57,39 @@ class FlexibleArgmax(nn.Module):
         if return_argmax_indices:
             return argmax_values, argmax_indices
         return argmax_values.squeeze()
+
+
+class ResidualStack(nn.Module):
+
+    def __init__(self, input_dim: int, output_dim: int, stack_size: int, last_activation: bool = True):
+        super(ResidualStack, self).__init__()
+        residual_blocks = []
+        for i in range(stack_size - 1):
+            residual_blocks.append(ResidualBlock(input_dim if i == 0 else output_dim, output_dim))
+        residual_blocks.append(ResidualBlock(input_dim if stack_size == 1 else output_dim, output_dim, last_activation))
+        self.residual_blocks = nn.Sequential(*tuple(residual_blocks))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.residual_blocks(x)
+
+
+class ResidualBlock(nn.Module):
+
+    def __init__(self, input_dim: int, output_dim: int, last_activation: bool = True):
+        super(ResidualBlock, self).__init__()
+        self.identity = nn.Identity() if input_dim == output_dim else nn.Linear(input_dim, output_dim, bias=False)
+        self.residual_function = nn.Sequential(
+            nn.Linear(input_dim, output_dim),
+            nn.LayerNorm(output_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(output_dim, output_dim),
+            nn.LayerNorm(output_dim)
+        )
+        self.last_activation = last_activation
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = self.residual_function(x) + self.identity(x)
+        return torch.relu(out) if self.last_activation else out
 
 
 class LinearStack(nn.Module):
@@ -67,12 +112,15 @@ class LinearStack(nn.Module):
         for layer in range(n_layers):
             if layer == 0:
                 layers.append(nn.Linear(input_dim, hidden_dim))
+                #layers.append(nn.LayerNorm(hidden_dim))
             elif layer == n_layers-1:
                 layers.append(nn.Linear(hidden_dim, output_dim))
+                #layers.append(nn.LayerNorm(output_dim))
                 if not last_activation:
                     break
             else:
                 layers.append(nn.Linear(hidden_dim, hidden_dim))
+                #layers.append(nn.LayerNorm(hidden_dim))
             layers.append(nn.ReLU(inplace=True))
         return nn.Sequential(*tuple(layers))
 
@@ -146,8 +194,3 @@ class PhaseCompetitionLayer(pyg_nn.MessagePassing):
         #return self.phase_competition_layer(pair_demand_embedding * pair_relation_embedding)
         return self.phase_competition_layer(pair_demand_embedding)
 
-
-class FlexibleDuelingHead(nn.Module):
-
-    def __init__(self, input_dim: int, hidden_dim: int):
-        self.state_value_stream = nn.Sequential

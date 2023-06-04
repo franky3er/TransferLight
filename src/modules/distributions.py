@@ -4,6 +4,7 @@ import torch
 from torch import nn
 import torch_geometric as pyg
 from torch_geometric import nn as pyg_nn
+from torch_geometric.nn import aggr
 
 from src.modules.utils import FlexibleArgmax
 
@@ -59,7 +60,7 @@ class FlexibleCategoricalLogProb(pyg_nn.MessagePassing):
         super(FlexibleCategoricalLogProb, self).__init__(aggr="sum")
 
     def forward(self, logits: torch.Tensor, index: torch.LongTensor):
-        logits = logits.unsqueeze(-1)
+        logits = normalize_logits(logits, index).unsqueeze(-1)
         edge_index = self._create_edge_index(index)
         exp_logits = torch.exp(logits)
         return self.propagate(edge_index, logits=logits, exp_logits=exp_logits).squeeze()
@@ -94,6 +95,7 @@ class FlexibleCategoricalEntropy(pyg_nn.MessagePassing):
         super(FlexibleCategoricalEntropy, self).__init__(aggr="sum")
 
     def forward(self, logits: torch.Tensor, index: torch.Tensor):
+        logits = normalize_logits(logits, index)
         n_groups = torch.max(index) + 1
         edge_index = self._create_edge_index(index)
         probs = pyg.utils.softmax(logits, index).unsqueeze(1)
@@ -125,3 +127,10 @@ class FlexibleCategoricalSampler(nn.Module):
         z = self.gumbel_dist.sample(logits.shape).to(logits.get_device())
         samples = self.argmax(logits + z, index, return_argmax_indices=return_sample_indices)
         return samples
+
+
+def normalize_logits(logits: torch.Tensor, index: torch.LongTensor):
+    logits = logits.unsqueeze(1)
+    max_logits = aggr.MaxAggregation()(logits, index)
+    norm_logits = logits - max_logits[index]
+    return norm_logits.squeeze()

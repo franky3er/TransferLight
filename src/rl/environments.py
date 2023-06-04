@@ -5,6 +5,7 @@ import random
 from typing import Any, List, Tuple, Union
 
 import libsumo as traci
+import numpy as np
 import sumolib.net
 import torch
 from torch import multiprocessing as mp
@@ -53,7 +54,7 @@ class TscMarlEnvironment(MarlEnvironment):
         self.current_step = 0
         self.current_episode = 0
 
-    def reset(self, return_n_agents: bool = False) -> Any:
+    def reset(self, return_n_agents: bool = False, return_n_actions: bool = False) -> Any:
         self.close()
         self.current_step = 0
         net_xml_path, rou_xml_path = next(self.scenarios)
@@ -72,11 +73,17 @@ class TscMarlEnvironment(MarlEnvironment):
                 new_logic = traci.trafficlight.Logic(f"{logic.programID}-new", logic.type, random_phase_idx, new_phases)
                 traci.trafficlight.setCompleteRedYellowGreenDefinition(tls.getID(), new_logic)
         self.traffic_representation = TrafficRepresentation.create(self.traffic_representation_name, self.net)
-        n_agents = len(self.traffic_representation.get_signalized_intersections())
+        signalized_intersections = self.traffic_representation.get_signalized_intersections()
+        n_agents = len(signalized_intersections)
+        n_actions = [len(self.traffic_representation.get_phases(intersection_id))
+                     for intersection_id in signalized_intersections]
         state = self.traffic_representation.get_state()
-        if return_n_agents:
-            return state, n_agents
-        return state
+        if not return_n_agents and not return_n_actions:
+            return state
+        out = [state]
+        out += [n_agents] if return_n_agents else []
+        out += [n_actions] if return_n_actions else []
+        return tuple(out)
 
     def close(self):
         traci.close()
@@ -163,19 +170,29 @@ class MultiprocessingTscMarlEnvironment(MarlEnvironment):
         return rank, self.pipes[rank][1], self.scenarios_dir, self.traffic_representation_name, self.max_steps, \
             self.use_default, skip_scenarios
 
-    def reset(self) -> Any:
-        self.broadcast_msg(("reset", {"return_n_agents": True}))
+    def reset(self, return_n_workers: bool = False, return_worker_offsets: bool = False) -> Any:
+        self.broadcast_msg(("reset", {"return_n_agents": True, "return_n_actions": True}))
         states = []
         self.n_agents = []
         self.agent_worker_assignment = []
+        worker_total_actions = []
         for rank in range(self.n_workers):
             parent_end, _ = self.pipes[rank]
-            state, n_agents = parent_end.recv()
+            state, n_agents, n_actions = parent_end.recv()
             states.append(state)
             self.n_agents.append(n_agents)
+            worker_total_actions.append(sum(n_actions))
         self.agent_worker_assignment = list(itertools.chain(*([rank for _ in range(n_agents)]
                                                               for rank, n_agents in enumerate(self.n_agents))))
-        return self._batch_states(states)
+        states = self._batch_states(states)
+        if not return_n_workers and not return_worker_offsets:
+            return states
+        worker_agent_offsets = np.cumsum(self.n_agents).tolist()
+        worker_action_offsets = np.cumsum(worker_total_actions).tolist()
+        out = [states]
+        out += [self.n_workers] if return_n_workers else []
+        out += [worker_agent_offsets, worker_action_offsets]
+        return tuple(out)
 
     def step(self, actions: List[int]) -> Tuple[Batch, torch.Tensor, bool]:
         actions = self._distribute_actions(actions)

@@ -3,7 +3,8 @@ import random
 from typing import List, Tuple
 
 import torch
-from torch_geometric.data import Data, Batch
+from torch_geometric.data import Batch
+from torch_geometric.data.data import BaseData
 
 
 class ReplayBuffer:
@@ -13,24 +14,25 @@ class ReplayBuffer:
         self.batch_size = batch_size
         self.buffer = deque(maxlen=buffer_size)
 
-    def add(self, state: Data, actions: List[int], rewards: torch.Tensor, next_state: Data, done: bool):
-        self.buffer.append((state, torch.tensor(actions), rewards, next_state, torch.tensor([done])))
+    def add(self, states: List[BaseData], actions: List[List[int]], rewards: List[torch.Tensor],
+            next_states: List[BaseData]):
+        for experience_tuple in zip(states, actions, rewards, next_states):
+            self.buffer.append(experience_tuple)
 
     def __len__(self):
         return len(self.buffer)
 
-    def sample(self) -> Tuple[Batch, torch.Tensor, torch.Tensor, Batch, torch.Tensor]:
+    def sample(self) -> Tuple[Batch, torch.Tensor, torch.Tensor, Batch]:
         sample_size = self.batch_size if len(self) >= self.batch_size else len(self)
         experience_tuples = random.sample(self.buffer, sample_size)
-        return self.experience_tuples_to_tensors(experience_tuples)
+        return self._batch(experience_tuples)
 
     @staticmethod
-    def experience_tuples_to_tensors(
-            experience_tuples: List[Tuple[Data, torch.Tensor, torch.Tensor, Data, torch.Tensor]]
-    ) -> tuple[Batch, torch.Tensor, torch.Tensor, Batch, torch.Tensor]:
+    def _batch(
+            experience_tuples: List[Tuple[BaseData, torch.Tensor, torch.Tensor, BaseData]]
+    ) -> Tuple[Batch, torch.Tensor, torch.Tensor, Batch]:
         states = Batch.from_data_list([experience_tuple[0] for experience_tuple in experience_tuples])
-        actions = torch.cat([experience_tuple[1] for experience_tuple in experience_tuples])
-        rewards = torch.cat([experience_tuple[2] for experience_tuple in experience_tuples])
+        actions = torch.cat([experience_tuple[1] for experience_tuple in experience_tuples], dim=0)
+        rewards = torch.cat([experience_tuple[2] for experience_tuple in experience_tuples], dim=0)
         next_states = Batch.from_data_list([experience_tuple[3] for experience_tuple in experience_tuples])
-        dones = torch.cat([experience_tuple[4] for experience_tuple in experience_tuples])
-        return states, actions, rewards, next_states, dones
+        return states, actions, rewards, next_states

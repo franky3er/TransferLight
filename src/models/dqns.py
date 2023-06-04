@@ -5,7 +5,6 @@ from torch import nn
 from torch.nn.init import orthogonal_
 from torch_geometric import nn as pyg_nn
 
-from src.modules.dqn_heads import DuelingHead
 from src.modules.utils import PhaseDemandLayer
 
 

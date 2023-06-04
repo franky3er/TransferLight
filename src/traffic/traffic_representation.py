@@ -1,3 +1,4 @@
+import math
 from abc import ABC, abstractmethod
 from collections import defaultdict
 import itertools
@@ -69,7 +70,6 @@ class TrafficRepresentation(ABC):
                 if movement not in self.phase_movements[phase]:
                     self.phase_movements[phase].append(movement)
                     self.phase_movement_params[(phase, movement)] = params
-
 
         # Edge Indices
         self.edge_index_intersection_to_intersection = [
@@ -178,7 +178,6 @@ class TrafficRepresentation(ABC):
         segments_vehicle_density = (np.array(total_segments_vehicle_length) / np.array(total_segments_length)).tolist()
         return segments_vehicle_density if n_segments > 1 else segments_vehicle_density[0]
 
-
     def get_intersection_level_metrics(self, metric: str = None):
         if metric == "queue_length":
             metric_fn = self.get_queue_length_junction
@@ -286,74 +285,207 @@ class PressLightTrafficRepresentation(TrafficRepresentation):
         return - torch.tensor(self.get_intersection_level_metrics("pressure"))
 
 
-class TestTrafficRepresentation(TrafficRepresentation):
+class GeneraLightTrafficRepresentation(TrafficRepresentation):
 
-    def __init__(self, *args, n_segments: int = 3):
-        super(TestTrafficRepresentation, self).__init__(*args)
-        self.n_segments = n_segments
+    def __init__(self, *args, segment_length: float = 20.0):
+        super(GeneraLightTrafficRepresentation, self).__init__(*args)
+        self.segment_length = segment_length
+        self.lane_segments = []
+        self.lane_segment_bins = {}
+        self.lane_segment_proportional_length = {}
+        for lane_id in self.lanes:
+            lane = self.net.getLane(lane_id)
+            lane_length = lane.getLength()
+            n_segments = math.ceil(lane_length / self.segment_length)
+            segment_bins = [((i+1) * self.segment_length if i < n_segments - 1 else lane_length)
+                            for i in range(n_segments)]
+            segment_length = [(segment_bins[i] if i == 0 else segment_bins[i] - segment_bins[i-1]) / self.segment_length
+                              for i in range(n_segments)]
+            self.lane_segment_bins[lane_id] = segment_bins
+            self.lane_segment_proportional_length[lane_id] = segment_length
+            segments = [(lane_id, i) for i in range(n_segments)]
+            self.lane_segments += segments
 
-    def get_state(self) -> Any:
+        self.edge_index_lane_segment_to_lane = []
+        self.edge_attr_lane_segment_to_lane = []
+        for lane_id in self.lanes:
+            n_segments = len(self.lane_segment_bins[lane_id])
+            self.edge_index_lane_segment_to_lane += [
+                (self.lane_segments.index((lane_id, i)), self.lanes.index(lane_id))
+                for i in range(n_segments)
+            ]
+            self.edge_attr_lane_segment_to_lane += [
+                [float(i)] for i in range(n_segments)
+            ]
+        self.edge_attr_lane_segment_to_lane = torch.tensor(
+            self.edge_attr_lane_segment_to_lane)
+
+        self.edge_index_lane_to_downstream_movement = []
+        self.edge_index_lane_to_upstream_movement = []
+        self.edge_attr_lane_to_downstream_movement = []
+        self.edge_attr_lane_to_upstream_movement = []
+        lane_movements = defaultdict(lambda: {})
+        for lane_id in self.lanes:
+            lane_movements[lane_id] = set([movement[2] for movement in self.movements
+                                           for incoming_lane_id, _, _ in self.movements[movement]
+                                           if incoming_lane_id == lane_id])
+        for movement in self.movements.keys():
+            movement_incoming_lanes = set([incoming_lane for incoming_lane, _, _ in self.movements[movement]])
+            incoming_lanes = [lane.getID() for lane in self.net.getEdge(movement[0]).getLanes()]
+            incoming_involved = [1 if lane_id in movement_incoming_lanes else 0 for lane_id in incoming_lanes]
+            incoming_involved_start = incoming_involved.index(1)
+            incoming_involved_end = len(incoming_lanes) - list(reversed(incoming_involved)).index(1) - 1
+            n_incoming = len(incoming_lanes)
+            n_left_incoming_uninvolved = incoming_involved_start
+            n_incoming_involved = incoming_involved_end - incoming_involved_start + 1
+            n_right_incoming_uninvolved = n_incoming - n_left_incoming_uninvolved - n_incoming_involved
+            incoming_lanes_relative_pos = \
+                list(reversed(range(1, n_left_incoming_uninvolved + 1))) + \
+                [0 for _ in range(n_incoming_involved)] + \
+                list(range(1, n_right_incoming_uninvolved + 1))
+            for lane_id, rel_pos in zip(incoming_lanes, incoming_lanes_relative_pos):
+                self.edge_index_lane_to_downstream_movement.append((self.lanes.index(lane_id),
+                                                                    list(self.movements.keys()).index(movement)))
+                self.edge_attr_lane_to_downstream_movement.append([rel_pos])
+
+            movement_outgoing_lanes = set([outgoing_lane for _, _, outgoing_lane in self.movements[movement]])
+            outgoing_lanes = [lane.getID() for lane in self.net.getEdge(movement[2]).getLanes()]
+            outgoing_involved = [1 if lane_id in movement_outgoing_lanes else 0 for lane_id in outgoing_lanes]
+            outgoing_involved_start = outgoing_involved.index(1)
+            outgoing_involved_end = len(outgoing_lanes) - list(reversed(outgoing_involved)).index(1) - 1
+            n_outgoing = len(outgoing_lanes)
+            n_left_outgoing_uninvolved = outgoing_involved_start
+            n_outgoing_involved = outgoing_involved_end - incoming_involved_start + 1
+            n_right_outgoing_uninvolved = n_outgoing - n_left_outgoing_uninvolved - n_outgoing_involved
+            outgoing_lanes_relative_pos = \
+                list(reversed(range(1, n_left_outgoing_uninvolved + 1))) + \
+                [0 for _ in range(n_outgoing_involved)] + \
+                list(range(1, n_right_outgoing_uninvolved + 1))
+            for lane_id, rel_pos in zip(outgoing_lanes, outgoing_lanes_relative_pos):
+                self.edge_index_lane_to_upstream_movement.append((self.lanes.index(lane_id),
+                                                                  list(self.movements.keys()).index(movement)))
+                self.edge_attr_lane_to_upstream_movement.append([rel_pos])
+
+        self.edge_attr_lane_to_downstream_movement = torch.tensor(self.edge_attr_lane_to_downstream_movement)
+        self.edge_attr_lane_to_upstream_movement = torch.tensor(self.edge_attr_lane_to_upstream_movement)
+
+        self.edge_attr_movement_to_phase = []
+        for movement, phase in [(list(self.movements.keys())[m], self.phases[p])
+                                for m, p in self.edge_index_movement_to_phase]:
+            params = self.phase_movement_params[(phase, movement)]
+            protected = params["protected"]
+            permitted = not protected
+            self.edge_attr_movement_to_phase.append([float(permitted), float(protected)])
+        self.edge_attr_movement_to_phase = torch.tensor(self.edge_attr_movement_to_phase)
+
+        self.edge_attr_phase_to_phase = []
+        for phase_j, phase_i in [(self.phases[j], self.phases[i]) for j, i in self.edge_index_phase_to_phase]:
+            phase_j_movements = self.phase_movements[phase_j]
+            phase_i_movements = self.phase_movements[phase_i]
+            intersecting_movements = set(phase_j_movements).intersection(set(phase_i_movements))
+            partial_competing = False
+            if len(intersecting_movements) > 0:
+                partial_competing = True
+            self.edge_attr_phase_to_phase.append([int(partial_competing)])
+        self.edge_attr_phase_to_phase = torch.tensor(self.edge_attr_phase_to_phase)
+
+    def get_state(self) -> HeteroData:
+        data = HeteroData()
+        data["lane_segment"].x = self._get_lane_segment_features()
+        data["lane"].x = self._get_lane_features()
+        data["movement"].x = self._get_movement_features()
+        data["phase"].x = self._get_phase_features()
+        data["intersection"].x = self._get_signalized_intersection_features()
+
+        data["lane_segment", "to", "lane"].edge_index = self.edge_index_to_tensor(
+            self.edge_index_lane_segment_to_lane)
+        data["lane", "to_downstream", "movement"].edge_index = self.edge_index_to_tensor(
+            self.edge_index_lane_to_downstream_movement)
+        data["lane", "to_upstream", "movement"].edge_index = self.edge_index_to_tensor(
+            self.edge_index_lane_to_upstream_movement
+        )
+        data["movement", "to", "phase"].edge_index = self.edge_index_to_tensor(self.edge_index_movement_to_phase)
+        data["phase", "to", "phase"].edge_index = self.edge_index_to_tensor(self.edge_index_phase_to_phase)
+        data["phase", "to", "intersection"].edge_index = self.edge_index_to_tensor(
+            self.edge_index_phase_to_intersection)
+
+        data["lane_segment", "to", "lane"].edge_attr = self.edge_attr_lane_segment_to_lane
+        data["lane", "to_downstream", "movement"].edge_attr  =self.edge_attr_lane_to_downstream_movement
+        data["lane", "to_upstream", "movement"].edge_attr = self.edge_attr_lane_to_upstream_movement
+        data["movement", "to", "phase"].edge_attr = self.edge_attr_movement_to_phase
+        data["phase", "to", "phase"].edge_attr = self.edge_attr_phase_to_phase
+
+        return data
+
+    def _get_lane_segment_features(self) -> torch.Tensor:
         x = []
-        for intersection_id in self.signalized_intersections:
-            x_intersection = [0.0 for _ in range(len(self.get_phases(intersection_id)))]
-            x_intersection[self.get_current_phase(intersection_id)] = 1.0
+        for lane_id in self.lanes:
+            segment_veh_len = [0.0 for _ in range(len(self.lane_segment_bins[lane_id]))]
+            for veh_id in traci.lane.getLastStepVehicleIDs(lane_id):
+                veh_len = traci.vehicle.getLength(veh_id)
+                veh_pos = np.digitize(traci.vehicle.getLanePosition(veh_id), self.lane_segment_bins[lane_id])
+                segment_veh_len[veh_pos] += veh_len
+            segment_veh_density = np.clip(
+                np.array(segment_veh_len) /
+                (np.array(self.lane_segment_proportional_length[lane_id]) * self.segment_length),
+                0.0, 1.0
+            )
+            for segment_data in zip(segment_veh_density,
+                                    self.lane_segment_proportional_length[lane_id]):
+                x.append(list(segment_data))
+        return torch.tensor(x, dtype=torch.float32)
 
-            for movement in [m for m in self.movements.keys() if m[1] == intersection_id]:
-                x_movement = []
-                incoming_approach, _, outgoing_approach = movement
-                lane_movements = self.movements[movement]
-                incoming_lanes = {lane_id for lane_id, _, _ in lane_movements}
-                outgoing_lanes = {lane_id for _, _, lane_id in lane_movements}
-                incoming_approach_data = self._get_incoming_approach_data(incoming_lanes)
-                outgoing_approach_data = self._get_outgoing_approach_data(outgoing_lanes)
-                x_movement += incoming_approach_data
-                x_movement += outgoing_approach_data
-                x_intersection += x_movement
+    def _get_lane_features(self) -> torch.Tensor:
+        x = []
+        for _ in self.lanes:
+            x.append([1.0])
+        return torch.tensor(x, dtype=torch.float32)
 
-            x.append(x_intersection)
-        x = torch.tensor(x, dtype=torch.float32)
-        return Data(x=x)
+    def _get_movement_features(self) -> torch.Tensor:
+        x = []
+        for movement in self.movements.keys():
+            incoming_approach_id, intersection_id, outgoing_approach_id = movement
+            movement_prohibited = True
+            movement_permitted = False
+            movement_protected = False
+            if intersection_id in self.signalized_intersections:
+                phase = (intersection_id, self.get_current_phase(intersection_id))
+                if movement in self.phase_movements[phase]:
+                    movement_params = self.phase_movement_params[(phase, movement)]
+                    movement_prohibited = False
+                    movement_permitted = not movement_params["protected"]
+                    movement_protected = movement_params["protected"]
+            else:
+                movement_prohibited = False
+                movement_permitted = True
+                movement_protected = False
+            x_movement = [float(movement_prohibited), float(movement_permitted), float(movement_protected)]
+            x.append(x_movement)
+        return torch.tensor(x, dtype=torch.float32)
 
-    def _get_incoming_approach_data(self, lanes: List[str]):
-        segment_lengths = [0 for _ in range(self.n_segments)]
-        segment_lengths_vehicles = [0 for _ in range(self.n_segments)]
-        for lane_id in lanes:
-            lane_segment_length = traci.lane.getLength(lane_id) / self.n_segments
-            segment_lengths = [segment_length + lane_segment_length for segment_length in segment_lengths]
-            lane_segment_bins = [(segment+1) * lane_segment_length for segment in range(self.n_segments)]
-            vehicle_ids = traci.lane.getLastStepVehicleIDs(lane_id)
-            for vehicle_id in vehicle_ids:
-                vehicle_len = traci.vehicle.getLength(vehicle_id)
-                vehicle_pos = traci.vehicle.getLanePosition(vehicle_id)
-                vehicle_seg = None
-                for bin, border_val in enumerate(lane_segment_bins):
-                    if vehicle_pos <= border_val:
-                        vehicle_seg = bin
-                        break
-                segment_lengths_vehicles[vehicle_seg] += vehicle_len
-        segment_lengths = np.array(segment_lengths)
-        segment_lengths_vehicles = np.array(segment_lengths_vehicles)
-        segment_data = (segment_lengths_vehicles / segment_lengths)
-        return segment_data.tolist()
+    def _get_phase_features(self) -> torch.Tensor:
+        x = []
+        for phase in self.phases:
+            intersection_id, phase_idx = phase
+            phase_active = True if self.get_current_phase(intersection_id) == phase_idx else False
+            x_phase = [float(phase_active)]
+            x.append(x_phase)
+        return torch.tensor(x, dtype=torch.float32)
 
-    def _get_outgoing_approach_data(self, lanes: List[str]):
-        approach_length = 0
-        approach_length_vehicles = 0
-        for lane_id in lanes:
-            approach_length += traci.lane.getLength(lane_id)
-            vehicle_ids = traci.lane.getLastStepVehicleIDs(lane_id)
-            for vehicle_id in vehicle_ids:
-                approach_length_vehicles += traci.vehicle.getLength(vehicle_id)
-        return [approach_length_vehicles / approach_length]
+    def _get_signalized_intersection_features(self) -> torch.Tensor:
+        x = []
+        for _ in self.signalized_intersections:
+            x.append([1.0])
+        return torch.tensor(x, dtype=torch.float32)
 
     def get_rewards(self) -> torch.Tensor:
         return - torch.tensor(self.get_intersection_level_metrics("normalized_pressure"))
 
 
-class HieraGLightTrafficRepresentation(TrafficRepresentation):
+class TestTrafficRepresentation(TrafficRepresentation):
 
     def __init__(self, *args, n_segments: int = 3):
-        super(HieraGLightTrafficRepresentation, self).__init__(*args)
+        super(TestTrafficRepresentation, self).__init__(*args)
         self.n_segments = n_segments
 
     def get_state(self) -> HeteroData:
