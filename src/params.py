@@ -4,6 +4,7 @@ import torch
 
 PROJECT_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), '..'))
 SCENARIOS_ROOT = os.path.join(PROJECT_ROOT, "scenarios")
+TRAIN_SCENARIOS_ROOT = os.path.join(SCENARIOS_ROOT, "train")
 TMP_DIR = os.path.join(PROJECT_ROOT, "tmp")
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"

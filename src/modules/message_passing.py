@@ -96,19 +96,28 @@ class AttentionDirectedBipartiteMessagePassing(DirectedBipartiteMessagePassing):
         self.output_dim = output_dim
         self.positional_encoding_method = positional_encoding_method
         self.d = output_dim / heads
-        if positional_encoding_method in ["alibi", "alibi_trainable"]:
-            input_edge_dim -= 1
-            trainable_slope = positional_encoding_method == "alibi_trainable"
+        input_dim = input_src_dim + input_dst_dim + input_edge_dim
+        if positional_encoding_method in ["alibi", "alibi_learnable"]:
+            learnable_slope = positional_encoding_method == "alibi_learnable"
             slope_first_term = 1 / (2 ** (8/heads))
             slope_common_ratio = slope_first_term
             slope = slope_first_term * (slope_common_ratio ** torch.arange(heads))
             slope = slope.unsqueeze(0)
-            self.slope = nn.Parameter(data=slope, requires_grad=trainable_slope)
-        input_dim = input_src_dim + input_dst_dim + input_edge_dim
+            self.slope = nn.Parameter(data=slope, requires_grad=learnable_slope)
+            input_dim -= 1
+        if positional_encoding_method == "learnable":
+            input_edge_dim = input_edge_dim - 1
+            input_dim = input_src_dim + input_dst_dim + input_edge_dim
+            max_len = 10
+            self.input_layer = ResidualStack(input_dim, output_dim, 1)
+            self.pos_embedding = nn.Embedding(num_embeddings=max_len, embedding_dim=output_dim)
+            self.pos_embedding.weight.data.uniform_(-0.1, 0.1)
+            input_dim = output_dim
+
         self.q = nn.Parameter(data=torch.rand(1, heads, output_dim // heads) * 0.1, requires_grad=True)
-        self.k_linear = ResidualStack(input_dim, output_dim, n_layer_message, last_activation=False)
-        self.v_linear = ResidualStack(input_dim, output_dim, n_layer_message, last_activation=False)
-        self.out_linear = ResidualStack(output_dim, output_dim, n_layer_update, last_activation=True)
+        self.k_layers = ResidualStack(input_dim, output_dim, n_layer_message, last_activation=False)
+        self.v_layers = ResidualStack(input_dim, output_dim, n_layer_message, last_activation=False)
+        self.out_layers = ResidualStack(output_dim, output_dim, n_layer_update, last_activation=True)
 
     def forward(
             self,
@@ -126,8 +135,12 @@ class AttentionDirectedBipartiteMessagePassing(DirectedBipartiteMessagePassing):
             edge_attr: torch.Tensor,
             index: torch.LongTensor
     ) -> torch.Tensor:
-        if self.positional_encoding_method in ["alibi", "alibi_trainable"]:
-            return self._alibi_attention_message(x_src, x_dst, edge_attr, index)
+        if self.positional_encoding_method in ["alibi", "alibi_learnable"]:
+            return self._alibi_message(x_src, x_dst, edge_attr, index)
+        if self.positional_encoding_method in ["sinusoidal"]:
+            return self._sinusoidal_positional_encoding_message(x_src, x_dst, edge_attr, index)
+        if self.positional_encoding_method == "learnable":
+            return self._learnable_positional_encoding_message(x_src, x_dst, edge_attr, index)
         else:
             return self._standard_attention_message(x_src, x_dst, edge_attr, index)
 
@@ -138,25 +151,10 @@ class AttentionDirectedBipartiteMessagePassing(DirectedBipartiteMessagePassing):
             edge_attr: torch.Tensor,
             index: torch.LongTensor
     ) -> torch.Tensor:
-        concat_attr = []
-        if x_src is not None:
-            concat_attr.append(x_src)
-        if x_dst is not None:
-            concat_attr.append(x_dst)
-        if edge_attr is not None:
-            concat_attr.append(edge_attr)
-        concat_attr = torch.concat(concat_attr, dim=1)
+        x = self._concat_features(x_src, x_dst, edge_attr)
+        return self._attention(x, index)
 
-        k = self.k_linear(concat_attr).view(-1, self.heads, self.output_dim // self.heads)
-        v = self.v_linear(concat_attr).view(-1, self.heads, self.output_dim // self.heads)
-
-        attention_coef = (self.d ** (1/2)) * torch.sum(self.q * k, dim=-1)
-        attention_weights = softmax(attention_coef, index).view(-1, self.heads, 1)
-
-        out = attention_weights * v
-        return out.view(-1, self.output_dim).contiguous()
-
-    def _alibi_attention_message(
+    def _alibi_message(
             self,
             x_src: torch.Tensor,
             x_dst: torch.Tensor,
@@ -165,27 +163,58 @@ class AttentionDirectedBipartiteMessagePassing(DirectedBipartiteMessagePassing):
     ) -> torch.Tensor:
         pos = edge_attr[:, :1]
         edge_attr = edge_attr[:, 1:] if edge_attr.size(1) > 1 else None
-        concat_attr = []
-        if x_src is not None:
-            concat_attr.append(x_src)
-        if x_dst is not None:
-            concat_attr.append(x_dst)
-        if edge_attr is not None:
-            concat_attr.append(edge_attr)
-        concat_attr = torch.concat(concat_attr, dim=1)
-
-        k = self.k_linear(concat_attr).view(-1, self.heads, self.output_dim // self.heads)
-        v = self.v_linear(concat_attr).view(-1, self.heads, self.output_dim // self.heads)
+        x = self._concat_features(x_src, x_dst, edge_attr)
 
         bias = - self.slope * pos
-        attention_coef = (self.d ** (1/2)) * torch.sum(self.q * k, dim=-1) + bias
-        attention_weights = softmax(attention_coef, index).view(-1, self.heads, 1)
+        return self._attention(x, index, bias)
 
+    def _sinusoidal_positional_encoding_message(
+            self,
+            x_src: torch.Tensor,
+            x_dst: torch.Tensor,
+            edge_attr: torch.Tensor,
+            index: torch.LongTensor
+    ) -> torch.Tensor:
+        pass
+
+    def _learnable_positional_encoding_message(
+            self,
+            x_src: torch.Tensor,
+            x_dst: torch.Tensor,
+            edge_attr: torch.Tensor,
+            index: torch.LongTensor
+    ) -> torch.Tensor:
+        pos = edge_attr[:, :1].squeeze().to(dtype=torch.long)
+        max_len = self.pos_embedding.num_embeddings
+        pos[pos > max_len-1] = max_len-1
+        edge_attr = edge_attr[:, 1:]
+        x = self._concat_features(x_src, x_dst, edge_attr)
+        x = self.input_layer(x)
+        pos_embedding = self.pos_embedding(pos)
+        x = x + pos_embedding
+        return self._attention(x, index)
+
+    @staticmethod
+    def _concat_features(x_src: torch.Tensor, x_dst: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
+        x = []
+        if x_src is not None:
+            x.append(x_src)
+        if x_dst is not None:
+            x.append(x_dst)
+        if edge_attr is not None:
+            x.append(edge_attr)
+        return torch.concat(x, dim=1)
+
+    def _attention(self, x: torch.Tensor, index: torch.LongTensor, bias: torch.Tensor = 0.0):
+        k = self.k_layers(x).view(-1, self.heads, self.output_dim // self.heads)
+        v = self.v_layers(x).view(-1, self.heads, self.output_dim // self.heads)
+        attention_coef = (1 / (self.d ** (1 / 2))) * torch.sum(self.q * k, dim=-1) + bias
+        attention_weights = softmax(attention_coef, index).view(-1, self.heads, 1)
         out = attention_weights * v
         return out.view(-1, self.output_dim).contiguous()
 
     def update(self, x_dst: torch.Tensor, aggr_messages: torch.Tensor) -> torch.Tensor:
-        return self.out_linear(torch.relu(aggr_messages))
+        return self.out_layers(torch.relu(aggr_messages))
 
 
 class GeneraLightLaneDemandEmbedding(nn.Module):
@@ -204,7 +233,7 @@ class GeneraLightLaneDemandEmbedding(nn.Module):
         self.lane_demand_embedding = AttentionDirectedBipartiteMessagePassing(
             lane_segment_dim, lane_dim, lane_segment_to_lane_edge_dim, output_dim, heads,
             n_layer_message=n_layer_message, n_layer_update=n_layer_update,
-            positional_encoding_method="alibi_trainable")
+            positional_encoding_method=None)
 
     def forward(
             self,
@@ -225,6 +254,8 @@ class GeneraLightMovementDemandEmbedding(nn.Module):
             movement_dim: int,
             lane_to_downstream_movement_edge_dim: int,
             lane_to_upstream_movement_edge_dim: int,
+            movement_to_movement_edge_dim: int,
+            movement_to_movement_hops: int,
             output_dim: int,
             heads: int,
             n_layer_message: int,
@@ -232,14 +263,23 @@ class GeneraLightMovementDemandEmbedding(nn.Module):
             n_layer_output: int
     ):
         super(GeneraLightMovementDemandEmbedding, self).__init__()
-        self.downstream_movement_demand_embedding = AttentionDirectedBipartiteMessagePassing(
+        self.incoming_approach_embedding = AttentionDirectedBipartiteMessagePassing(
             lane_dim, movement_dim, lane_to_downstream_movement_edge_dim, output_dim, heads,
-            n_layer_message=n_layer_message, n_layer_update=n_layer_update, positional_encoding_method="alibi_trainable")
-        self.upstream_movement_demand_embedding = AttentionDirectedBipartiteMessagePassing(
+            n_layer_message=n_layer_message, n_layer_update=n_layer_update,
+            positional_encoding_method="alibi_learnable")
+        self.outgoing_approach_embedding = AttentionDirectedBipartiteMessagePassing(
             lane_dim, movement_dim, lane_to_upstream_movement_edge_dim, output_dim, heads,
-            n_layer_message=n_layer_message, n_layer_update=n_layer_update, positional_encoding_method="alibi_trainable")
-        self.combined_movement_demand_embedding = ResidualStack(2*output_dim, output_dim, n_layer_output,
-                                                                last_activation=True)
+            n_layer_message=n_layer_message, n_layer_update=n_layer_update,
+            positional_encoding_method="alibi_learnable")
+        self.combined_movement_embedding = ResidualStack(2 * output_dim, output_dim, n_layer_output,
+                                                         last_activation=True)
+        self.movement_to_movement_embedding = nn.ModuleList()
+        for _ in range(movement_to_movement_hops):
+            self.movement_to_movement_embedding.append(
+                AttentionDirectedBipartiteMessagePassing(output_dim, output_dim, movement_to_movement_edge_dim,
+                                                         output_dim, heads, n_layer_message=n_layer_message,
+                                                         n_layer_update=n_layer_update)
+            )
 
     def forward(
             self,
@@ -247,15 +287,21 @@ class GeneraLightMovementDemandEmbedding(nn.Module):
             movement_x: torch.Tensor,
             lane_to_downstream_movement_edge_attr: torch.Tensor,
             lane_to_upstream_movement_edge_attr: torch.Tensor,
+            movement_to_movement_edge_attr: torch.Tensor,
             lane_to_downstream_movement_edge_index: Adj,
-            lane_to_upstream_movement_edge_index: Adj
+            lane_to_upstream_movement_edge_index: Adj,
+            movement_to_movement_edge_index: Adj,
     ):
-        downstream_embedding = self.downstream_movement_demand_embedding(
+        imcoming_approach_embedding = self.incoming_approach_embedding(
             lane_x, movement_x, lane_to_downstream_movement_edge_attr, lane_to_downstream_movement_edge_index)
-        upstream_embedding = self.upstream_movement_demand_embedding(
+        outgoing_approach_embedding = self.outgoing_approach_embedding(
             lane_x, movement_x, lane_to_upstream_movement_edge_attr, lane_to_upstream_movement_edge_index)
-        combined_embedding = torch.cat([downstream_embedding, upstream_embedding], dim=-1)
-        return self.combined_movement_demand_embedding(combined_embedding)
+        movement_embedding = self.combined_movement_embedding(
+            torch.cat([imcoming_approach_embedding, outgoing_approach_embedding], dim=-1))
+        for movement_to_movement_embedding in self.movement_to_movement_embedding:
+            movement_embedding = movement_to_movement_embedding(
+                movement_embedding, movement_embedding, movement_to_movement_edge_attr, movement_to_movement_edge_index)
+        return movement_embedding
 
 
 class GeneraLightPhaseDemandEmbedding(nn.Module):
@@ -286,6 +332,35 @@ class GeneraLightPhaseDemandEmbedding(nn.Module):
         phase_demand = self.phase_demand_embedding(movement_x, phase_x, movement_to_phase_edge_attr,
                                                    movement_to_phase_edge_index)
         return self.phase_competition(phase_demand, phase_demand, phase_to_phase_edge_attr, phase_to_phase_edge_index)
+
+
+class GeneraLightIntersectionDemandEmbedding(nn.Module):
+
+    def __init__(
+            self,
+            movement_dim: int,
+            intersection_dim: int,
+            movement_to_intersection_edge_dim: int,
+            output_dim: int,
+            heads: int,
+            n_layer_message: int,
+            n_layer_update: int
+    ):
+        super(GeneraLightIntersectionDemandEmbedding, self).__init__()
+        self.intersection_demand_embedding = AttentionDirectedBipartiteMessagePassing(
+            movement_dim, intersection_dim, movement_to_intersection_edge_dim, output_dim, heads,
+            n_layer_message=n_layer_message, n_layer_update=n_layer_update
+        )
+
+    def forward(
+            self,
+            movement_x: torch.Tensor,
+            intersection_x: torch.Tensor,
+            movement_to_intersection_edge_attr: torch.Tensor,
+            movement_to_intersection_edge_index = torch.Tensor
+    ):
+        return self.intersection_demand_embedding(movement_x, intersection_x, movement_to_intersection_edge_attr,
+                                                  movement_to_intersection_edge_index)
 
 
 class FRAPPhaseDemandEmbedding(nn.Module):

@@ -14,7 +14,7 @@ class RandomTrips:
     @staticmethod
     def _random_trips(args: List[str]):
         cmd = [PYTHON, RANDOM_TRIPS_SCRIPT] + args
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(cmd, stdout=subprocess.DEVNULL)#, stderr=subprocess.DEVNULL)
 
 
 randomTrips = RandomTrips()

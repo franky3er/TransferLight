@@ -12,10 +12,10 @@ from torch import multiprocessing as mp
 from torch_geometric.data import Batch, Data, HeteroData
 
 from src.params import ENV_ACTION_EXECUTION_TIME, ENV_YELLOW_TIME, ENV_RED_TIME
-from src.traffic.traffic_representation import TrafficRepresentation
+from src.rl.problem_formulations import ProblemFormulation
 
 
-class MarlEnvironment(ABC):
+class Environment(ABC):
 
     @abstractmethod
     def reset(self) -> Any:
@@ -30,9 +30,9 @@ class MarlEnvironment(ABC):
         pass
 
 
-class TscMarlEnvironment(MarlEnvironment):
+class MarlEnvironment(Environment):
 
-    def __init__(self, scenarios_dir: str, max_steps: int, traffic_representation: str, use_default: bool = False,
+    def __init__(self, scenarios_dir: str, max_patience: int, problem_formulation: str, use_default: bool = False,
                  demo: bool = False, skip_scenarios: List[bool] = None):
         if not skip_scenarios:
             skip_scenarios = [False for _ in range(len(os.listdir(scenarios_dir)))]
@@ -45,11 +45,11 @@ class TscMarlEnvironment(MarlEnvironment):
             rou_xml_path = os.path.join(scenario_dir, "routes.rou.xml")
             scenarios.append((net_xml_path, rou_xml_path))
         self.scenarios = itertools.cycle(scenarios)
-        self.traffic_representation_name = traffic_representation
-        self.traffic_representation = None
+        self.problem_formulation_name = problem_formulation
+        self.problem_formulation = None
         self.net = None
         self.sumo = "sumo-gui" if demo else "sumo"
-        self.max_steps = max_steps
+        self.max_patience = max_patience
         self.use_default = use_default
         self.current_step = 0
         self.current_episode = 0
@@ -58,6 +58,7 @@ class TscMarlEnvironment(MarlEnvironment):
         self.close()
         self.current_step = 0
         net_xml_path, rou_xml_path = next(self.scenarios)
+        print(net_xml_path)
         sumo_cmd = [self.sumo, "-n", net_xml_path, "-r", rou_xml_path, "--time-to-teleport", str(-1), "--no-warnings"]
         traci.start(sumo_cmd)
         self.net = sumolib.net.readNet(net_xml_path)
@@ -72,12 +73,12 @@ class TscMarlEnvironment(MarlEnvironment):
                 random_phase_idx = random.randrange(len(new_phases))
                 new_logic = traci.trafficlight.Logic(f"{logic.programID}-new", logic.type, random_phase_idx, new_phases)
                 traci.trafficlight.setCompleteRedYellowGreenDefinition(tls.getID(), new_logic)
-        self.traffic_representation = TrafficRepresentation.create(self.traffic_representation_name, self.net)
-        signalized_intersections = self.traffic_representation.get_signalized_intersections()
+        self.problem_formulation = ProblemFormulation.create(self.problem_formulation_name, self.net)
+        signalized_intersections = self.problem_formulation.get_signalized_intersections()
         n_agents = len(signalized_intersections)
-        n_actions = [len(self.traffic_representation.get_phases(intersection_id))
+        n_actions = [len(self.problem_formulation.get_phases(intersection_id))
                      for intersection_id in signalized_intersections]
-        state = self.traffic_representation.get_state()
+        state = self.problem_formulation.get_state()
         if not return_n_agents and not return_n_actions:
             return state
         out = [state]
@@ -87,15 +88,19 @@ class TscMarlEnvironment(MarlEnvironment):
 
     def close(self):
         traci.close()
-        self.traffic_representation = None
+        self.problem_formulation = None
         self.net = None
         self.current_step = 0
 
     def step(self, actions: List[int]) -> Tuple[Any, torch.Tensor, bool]:
         self._apply_actions(actions)
-        state = self.traffic_representation.get_state()
-        rewards = self.traffic_representation.get_rewards()
-        done = True if traci.simulation.getMinExpectedNumber() == 0 or self.current_step >= self.max_steps else False
+        state = self.problem_formulation.get_state()
+        rewards = self.problem_formulation.get_rewards()
+        max_waiting_time = self.problem_formulation.get_max_vehicle_waiting_time()
+        if max_waiting_time > self.max_patience:
+            print("max_waiting_time > max_patience")
+        done = (True if traci.simulation.getMinExpectedNumber() == 0 or max_waiting_time > self.max_patience
+                else False)
         return state, rewards, done
 
     def _apply_actions(self, actions: List[int]):
@@ -112,18 +117,23 @@ class TscMarlEnvironment(MarlEnvironment):
 
     def _apply_controlled_actions(self, actions: List[int]):
         actions = [actions] if isinstance(actions, int) else actions
-        previous_actions = self.traffic_representation.get_current_phases()
-        tls_junctions = self.traffic_representation.get_signalized_intersections()
-        transition_signals = [self._get_transition_signals(junction_id, prev_action, action)
-                              for junction_id, prev_action, action in zip(tls_junctions, previous_actions, actions)]
+        previous_actions = self.problem_formulation.get_current_phases()
+        signalized_intersections = self.problem_formulation.get_signalized_intersections()
+        transition_signals = [self._get_transition_signals(intersection, prev_action, action)
+                              for intersection, prev_action, action
+                              in zip(signalized_intersections, previous_actions, actions)]
+        green_signals = [self._get_signal(intersection, action)
+                         for intersection, action in zip(signalized_intersections, actions)]
         for t in range(ENV_ACTION_EXECUTION_TIME):
-            for tls_junction_id, tls_transition_signals in zip(tls_junctions, transition_signals):
-                traci.trafficlight.setRedYellowGreenState(tls_junction_id, tls_transition_signals[t])
+            for signalized_intersection, transition_signals_ in zip(signalized_intersections, transition_signals):
+                traci.trafficlight.setRedYellowGreenState(signalized_intersection, transition_signals_[t])
             traci.simulationStep()
+        for signalized_intersection, green_signal in zip(signalized_intersections, green_signals):
+            traci.trafficlight.setRedYellowGreenState(signalized_intersection, green_signal)
 
-    def _get_transition_signals(self, junction_id: str, current_phase: int, next_phase: int) -> List[str]:
-        current_green_signal = self._get_signal(junction_id, current_phase)
-        next_green_signal = self._get_signal(junction_id, next_phase)
+    def _get_transition_signals(self, intersection: str, current_phase: int, next_phase: int) -> List[str]:
+        current_green_signal = self._get_signal(intersection, current_phase)
+        next_green_signal = self._get_signal(intersection, next_phase)
         next_yellow_signal, next_red_signal = [], []
         for current_s, next_s in zip([*current_green_signal], [*next_green_signal]):
             if (current_s == "g" or current_s == "G") and next_s == "r":
@@ -147,7 +157,7 @@ class TscMarlEnvironment(MarlEnvironment):
         return traci.trafficlight.getCompleteRedYellowGreenDefinition(junction_id)[1].phases[phase].state
 
 
-class MultiprocessingTscMarlEnvironment(MarlEnvironment):
+class MultiprocessingMarlEnvironment(Environment):
 
     def __init__(self, scenarios_dir: str, max_steps: int, traffic_representation: str, n_workers: int,
                  use_default: bool = False):
@@ -164,6 +174,7 @@ class MultiprocessingTscMarlEnvironment(MarlEnvironment):
         [worker.start() for worker in self.workers]
         self.n_agents = None
         self.agent_worker_assignment = None
+        self.n_steps = None
 
     def _get_work_args(self, rank: int):
         skip_scenarios = [(s-rank) % self.n_workers != 0 for s in range(self.n_scenarios)]
@@ -171,6 +182,7 @@ class MultiprocessingTscMarlEnvironment(MarlEnvironment):
             self.use_default, skip_scenarios
 
     def reset(self, return_n_workers: bool = False, return_worker_offsets: bool = False) -> Any:
+        self.n_steps = 0
         self.broadcast_msg(("reset", {"return_n_agents": True, "return_n_actions": True}))
         states = []
         self.n_agents = []
@@ -195,6 +207,7 @@ class MultiprocessingTscMarlEnvironment(MarlEnvironment):
         return tuple(out)
 
     def step(self, actions: List[int]) -> Tuple[Batch, torch.Tensor, bool]:
+        self.n_steps += 1
         actions = self._distribute_actions(actions)
         [self.send_msg(("step", {"actions": actions[rank]}), rank) for rank in range(self.n_workers)]
         states, rewards, dones = [], [], []
@@ -219,8 +232,8 @@ class MultiprocessingTscMarlEnvironment(MarlEnvironment):
 
     @staticmethod
     def work(rank, worker_end, scenarios_dir, traffic_representation, max_steps, use_default, skip_scenarios):
-        env = TscMarlEnvironment(scenarios_dir, max_steps, traffic_representation, use_default,
-                                 skip_scenarios=skip_scenarios)
+        env = MarlEnvironment(scenarios_dir, max_steps, traffic_representation, use_default,
+                              skip_scenarios=skip_scenarios)
         print(f"Worker {rank} started")
         while True:
             cmd, kwargs = worker_end.recv()
@@ -251,4 +264,4 @@ class MultiprocessingTscMarlEnvironment(MarlEnvironment):
 
     @staticmethod
     def _batch_dones(dones: List[bool]) -> bool:
-        return all(dones)
+        return any(dones)
