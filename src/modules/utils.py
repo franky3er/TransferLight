@@ -1,132 +1,67 @@
-from typing import Dict, Tuple
-from collections import defaultdict
+from typing import List
 
 import torch
-from torch import nn
-from torch import Tensor
-from torch_geometric import nn as pyg_nn
-from torch_geometric.typing import Adj, NodeType
+from torch_geometric.utils import softmax
+from torch_geometric.nn import aggr
 
 
-class HeteroModule(nn.Module):
-
-    def __init__(self, modules: nn.ModuleDict):
-        super(HeteroModule, self).__init__()
-        self.modules = modules
-
-    def forward(self, x_dict: Dict[NodeType, torch.Tensor]):
-        for node_type, module in self.modules.items():
-            x_dict[node_type] = module(x_dict[node_type])
-        return x_dict
-
-
-class MultiInputSequential(nn.Sequential):
-
-    def forward(self, inputs):
-        for module in self._modules.values():
-            if type(inputs) == tuple:
-                inputs = module(*inputs)
-            else:
-                inputs = module(inputs)
-        return inputs
-
-
-class FlexibleArgmax(nn.Module):
-
-    @staticmethod
-    def forward(x: torch.Tensor, group_index: torch.Tensor, return_argmax_indices: bool = False,
-                keepdim: bool = True):
-        x = x.squeeze()
-        assert x.size(0) == group_index.size(0)
-        device = x.get_device()
-        dtype = x.dtype
-        n_items = x.size(0)
-        n_groups = torch.max(group_index) + 1
-        x_repeated = x.unsqueeze(1).repeat(1, n_groups)
-        item_index = torch.arange(0, n_items, device=device)
-        group_index = torch.nn.functional.one_hot(group_index)
-        cumsum_group_index = torch.cumsum(group_index, dim=0) - 1
-        dummy_tensor = torch.ones(n_items, n_groups, dtype=dtype, device=device) * torch.finfo(dtype).min
-        dummy_tensor = (1 - group_index) * dummy_tensor + group_index * x_repeated
-        argmax_index = torch.argmax(dummy_tensor, dim=0, keepdim=True)
-        argmax_values = torch.gather(cumsum_group_index, 0, argmax_index).squeeze()
-        argmax_indices = item_index[argmax_index.squeeze()]
-        if argmax_values.dim() == 0 and keepdim:
-            argmax_values = argmax_values.unsqueeze(0)
-            argmax_indices = argmax_indices.unsqueeze(0)
-        if return_argmax_indices:
-            return argmax_values, argmax_indices
-        return argmax_values.squeeze()
+def group_argmax(x: torch.Tensor, group_index: torch.Tensor, return_indices: bool = False, keepdim: bool = True):
+    x = x.squeeze()
+    assert x.size(0) == group_index.size(0)
+    device = x.get_device()
+    dtype = x.dtype
+    n_items = x.size(0)
+    n_groups = torch.max(group_index) + 1
+    x_repeated = x.unsqueeze(1).repeat(1, n_groups)
+    item_index = torch.arange(0, n_items, device=device)
+    group_index = torch.nn.functional.one_hot(group_index)
+    cumsum_group_index = torch.cumsum(group_index, dim=0) - 1
+    dummy_tensor = torch.ones(n_items, n_groups, dtype=dtype, device=device) * torch.finfo(dtype).min
+    dummy_tensor = (1 - group_index) * dummy_tensor + group_index * x_repeated
+    argmax_index = torch.argmax(dummy_tensor, dim=0, keepdim=True)
+    argmax_values = torch.gather(cumsum_group_index, 0, argmax_index).squeeze()
+    argmax_indices = item_index[argmax_index.squeeze()]
+    if argmax_values.dim() == 0 and keepdim:
+        argmax_values = argmax_values.unsqueeze(0)
+        argmax_indices = argmax_indices.unsqueeze(0)
+    if return_indices:
+        return argmax_values, argmax_indices
+    return argmax_values.squeeze()
 
 
-class ResidualStack(nn.Module):
-
-    def __init__(self, input_dim: int, output_dim: int, stack_size: int, last_activation: bool = True):
-        super(ResidualStack, self).__init__()
-        residual_blocks = []
-        for i in range(stack_size - 1):
-            residual_blocks.append(ResidualBlock(input_dim if i == 0 else output_dim, output_dim))
-        residual_blocks.append(ResidualBlock(input_dim if stack_size == 1 else output_dim, output_dim, last_activation))
-        self.residual_blocks = nn.Sequential(*tuple(residual_blocks))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.residual_blocks(x)
+def group_sum(x: torch.Tensor, group_index: torch.LongTensor):
+    assert x.size(0) == group_index.size(0)
+    if x.dim() == 1:
+        x = x.unsqueeze(1)
+    sum_aggr = aggr.SumAggregation()
+    return sum_aggr(x, group_index).squeeze()
 
 
-class ResidualBlock(nn.Module):
-
-    def __init__(self, input_dim: int, output_dim: int, last_activation: bool = True):
-        super(ResidualBlock, self).__init__()
-        self.identity = nn.Identity() if input_dim == output_dim else nn.Linear(input_dim, output_dim, bias=False)
-        self.residual_function = nn.Sequential(
-            nn.Linear(input_dim, output_dim),
-            nn.LayerNorm(output_dim),
-            nn.ReLU(inplace=True),
-            nn.Linear(output_dim, output_dim),
-            nn.LayerNorm(output_dim)
-        )
-        self.last_activation = last_activation
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out = self.residual_function(x) + self.identity(x)
-        return torch.relu(out) if self.last_activation else out
+def group_max(x: torch.Tensor, group_index: torch.LongTensor):
+    assert x.size(0) == group_index.size(0)
+    if x.dim() == 1:
+        x = x.unsqueeze(1)
+    max_aggr = aggr.MaxAggregation()
+    return max_aggr(x, group_index).squeeze()
 
 
-class LinearStack(nn.Module):
+def concat_features(features: List[torch.Tensor], dim: int = -1) -> torch.Tensor:
+    x = []
+    for feature in features:
+        if feature is not None:
+            assert isinstance(feature, torch.Tensor)
+            x.append(feature)
+    return torch.cat(x, dim=dim)
 
-    def __init__(self,
-                 input_dim: int,
-                 hidden_dim: int,
-                 output_dim: int,
-                 n_layer: int,
-                 last_activation: bool = True,
-                 residual_connections: bool = False):
-        super(LinearStack, self).__init__()
-        self.layers = (self._get_linear_stack(input_dim, hidden_dim, output_dim, n_layer, last_activation)
-                       if not residual_connections
-                       else self._get_res_linear_stack(input_dim, hidden_dim, output_dim, n_layer, last_activation))
 
-    @staticmethod
-    def _get_linear_stack(input_dim: int, hidden_dim: int, output_dim: int, n_layers: int, last_activation: bool):
-        layers = []
-        for layer in range(n_layers):
-            if layer == 0:
-                layers.append(nn.Linear(input_dim, hidden_dim))
-                #layers.append(nn.LayerNorm(hidden_dim))
-            elif layer == n_layers-1:
-                layers.append(nn.Linear(hidden_dim, output_dim))
-                #layers.append(nn.LayerNorm(output_dim))
-                if not last_activation:
-                    break
-            else:
-                layers.append(nn.Linear(hidden_dim, hidden_dim))
-                #layers.append(nn.LayerNorm(hidden_dim))
-            layers.append(nn.ReLU(inplace=True))
-        return nn.Sequential(*tuple(layers))
-
-    @staticmethod
-    def _get_res_linear_stack(input_dim: int, hidden_dim: int, output_dim: int, n_layers: int, last_activation: bool):
-        raise NotImplementedError()
-
-    def forward(self, x: torch.Tensor):
-        return self.layers(x)
+def neighborhood_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, heads: int, index: torch.LongTensor,
+                           bias: torch.Tensor = 0.0) -> torch.Tensor:
+    output_dim = v.size(1)
+    hidden_dim = output_dim // heads
+    q = q.view(-1, heads, hidden_dim)
+    k = k.view(-1, heads, hidden_dim)
+    v = v.view(-1, heads, hidden_dim)
+    attention_coefficients = (1 / (hidden_dim ** (1/2))) * torch.sum(q * k, dim=-1) + bias
+    attention_weights = softmax(attention_coefficients, index).view(-1, heads, 1)
+    out = attention_weights * v
+    return out.view(-1, output_dim).contiguous()

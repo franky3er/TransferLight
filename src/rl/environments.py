@@ -44,6 +44,7 @@ class MarlEnvironment(Environment):
             net_xml_path = os.path.join(scenario_dir, "network.net.xml")
             rou_xml_path = os.path.join(scenario_dir, "routes.rou.xml")
             scenarios.append((net_xml_path, rou_xml_path))
+        self.net_xml_path = None
         self.scenarios = itertools.cycle(scenarios)
         self.problem_formulation_name = problem_formulation
         self.problem_formulation = None
@@ -58,7 +59,7 @@ class MarlEnvironment(Environment):
         self.close()
         self.current_step = 0
         net_xml_path, rou_xml_path = next(self.scenarios)
-        print(net_xml_path)
+        self.net_xml_path = net_xml_path
         sumo_cmd = [self.sumo, "-n", net_xml_path, "-r", rou_xml_path, "--time-to-teleport", str(-1), "--no-warnings"]
         traci.start(sumo_cmd)
         self.net = sumolib.net.readNet(net_xml_path)
@@ -98,7 +99,7 @@ class MarlEnvironment(Environment):
         rewards = self.problem_formulation.get_rewards()
         max_waiting_time = self.problem_formulation.get_max_vehicle_waiting_time()
         if max_waiting_time > self.max_patience:
-            print("max_waiting_time > max_patience")
+            print(f"max_waiting_time > max_patience   ({self.net_xml_path})")
         done = (True if traci.simulation.getMinExpectedNumber() == 0 or max_waiting_time > self.max_patience
                 else False)
         return state, rewards, done

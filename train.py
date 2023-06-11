@@ -8,8 +8,9 @@ if __name__ == "__main__":
 
     scenarios_dir = os.path.join(SCENARIOS_ROOT, "train", "coordinated")
     traffic_representation = "GeneraLightProblemFormulation"
-    #environment = TscMarlEnvironment(scenarios_dir, 180, "MaxPressureTrafficRepresentation", use_default=False, demo=False)
-    environment = MultiprocessingMarlEnvironment(scenarios_dir, 450, traffic_representation, 1)
+    max_pressure_environment = MultiprocessingMarlEnvironment(scenarios_dir, 900, "MaxPressureProblemFormulation", 50)
+    environment = MultiprocessingMarlEnvironment(scenarios_dir, 900, traffic_representation, 50)
+    episodes = 20
 
     hidden_dim = 64
 
@@ -45,8 +46,6 @@ if __name__ == "__main__":
         }
     }
 
-    #agents = RandomAgents()
-    #agents = MaxPressureAgents(20)
-    agents = A2C(network, actor_head, critic_head, share_network=True, entropy_loss_weight=0.1, checkpoint_dir=os.path.join("agents", "A2C"), save_checkpoint=True)
-    #agents = DQN(network, dqn_head, discount_factor=0.9, batch_size=128, replay_buffer_size=10_000, learning_rate=0.01, eps_greedy_start=1.0, eps_greedy_end=0.1, eps_greedy_steps=1_000, tau=0.01, checkpoint_dir=os.path.join("agents", "DQN"), save_checkpoint=True)
-    agents.train_env(environment, episodes=1280)
+    #MaxPressure(20).train_env(max_pressure_environment, episodes=episodes)
+    A2C(network, actor_head, critic_head, share_network=True, entropy_loss_weight=0.1).train_env(environment, episodes=episodes, checkpoint_path="agents/A2C/actor-critic-checkpoint.pt")
+    #DQN(network, dqn_head, discount_factor=0.9, batch_size=128, replay_buffer_size=10_000, learning_rate=0.01, eps_greedy_start=1.0, eps_greedy_end=0.1, eps_greedy_steps=1_000, tau=0.01).train_env(environment, episodes=episodes, checkpoint_path="agents/DQN/dqn-checkpoint.pt")

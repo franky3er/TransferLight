@@ -1,7 +1,6 @@
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 import os
 from pathlib import Path
-import sys
 from typing import Any, List, Dict, Tuple, Union
 
 import torch
@@ -9,23 +8,19 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.init import orthogonal_
 from torch_geometric.data import HeteroData, Batch
-from torch_geometric.nn.aggr import MaxAggregation
 
 from src.data.replay_buffer import ReplayBuffer
-from src.modules.distributions import FlexibleCategorical
-from src.networks.network_bodies import NetworkBody
-from src.networks.network_heads import NetworkHead
-from src.modules.utils import MultiInputSequential, FlexibleArgmax
+from src.modules.distributions import GroupCategorical
+from src.modules.network_bodies import NetworkBody
+from src.modules.network_heads import NetworkHead
+from src.modules.base_modules import MultiInputSequential
+from src.modules.utils import group_argmax
 from src.params import ENV_ACTION_EXECUTION_TIME
 from src.rl.environments import MarlEnvironment, MultiprocessingMarlEnvironment
 from src.rl.exploration import ExpDecayEpsGreedyStrategy
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Use {device} device")
-
-
-max_aggr = MaxAggregation()
-argmax_aggr = FlexibleArgmax()
 
 
 class IndependentAgents(nn.Module):
@@ -36,11 +31,11 @@ class IndependentAgents(nn.Module):
         pass
 
     @abstractmethod
-    def train_env(self, environment: MarlEnvironment, episodes: int = 100):
+    def train_env(self, environment: MarlEnvironment, episodes: int = 100, checkpoint_path: str = None):
         pass
 
     @abstractmethod
-    def demo_env(self, environment: MarlEnvironment):
+    def demo_env(self, environment: MarlEnvironment, checkpoint_path: str = None):
         pass
 
     @staticmethod
@@ -63,7 +58,7 @@ class MaxPressure(IndependentAgents):
     def act(self, state: HeteroData) -> List[int]:
         x = state["phase"].x.squeeze().to(device)
         index = state["phase", "to", "intersection"].edge_index[1].to(device)
-        max_pressure_actions = argmax_aggr(x, index)
+        max_pressure_actions = group_argmax(x, index)
         if self.initialized:
             action_change = torch.logical_and(self.action_durations >= self.min_phase_steps,
                                               self.actions != max_pressure_actions)
@@ -75,7 +70,7 @@ class MaxPressure(IndependentAgents):
             self.initialized = True
         return self.actions.cpu().numpy().tolist()
 
-    def training(self, environment: MarlEnvironment, episodes: int = 100):
+    def train_env(self, environment: MultiprocessingMarlEnvironment, episodes: int = 100, checkpoint_path: str = None):
         for i in range(episodes):
             state = environment.reset()
             episode_rewards = []
@@ -93,7 +88,7 @@ class MaxPressure(IndependentAgents):
                     break
         environment.close()
 
-    def demo_env(self, environment: MarlEnvironment):
+    def demo_env(self, environment: MarlEnvironment, checkpoint_path: str = None):
         state = environment.reset()
         while True:
             actions = self.act(state)
@@ -116,10 +111,7 @@ class DQN(IndependentAgents):
             eps_greedy_end: float,
             eps_greedy_steps: int,
             replay_buffer_size: int,
-            batch_size: int,
-            checkpoint_dir: str = None,
-            save_checkpoint: bool = False,
-            load_checkpoint: bool = False
+            batch_size: int
     ):
         super(DQN, self).__init__()
         self.online_q_network = MultiInputSequential(
@@ -141,17 +133,6 @@ class DQN(IndependentAgents):
         self.replay_buffer = ReplayBuffer(replay_buffer_size, batch_size)
         self.apply(self._init_params)
 
-        if checkpoint_dir is not None:
-            Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
-            self.checkpoint_path = os.path.join(checkpoint_dir, "dqn-checkpoint.pt")
-            self.save_checkpoint = save_checkpoint
-            self.load_checkpoint = load_checkpoint
-        else:
-            self.save_checkpoint = False
-            self.load_checkpoint = False
-        if self.load_checkpoint:
-            self.load_state_dict(torch.load(self.checkpoint_path, map_location=device))
-
         self.n_workers = None
         self.worker_agent_offsets = None
         self.worker_action_offsets = None
@@ -165,9 +146,9 @@ class DQN(IndependentAgents):
     def act(self, state: HeteroData, eps: float = 0.0, training: bool = False) -> \
             Union[List[int], Tuple[List[int], torch.Tensor]]:
         action_values, index = self.forward(state)
-        greedy_actions, greedy_action_indices = argmax_aggr(action_values, index, return_argmax_indices=True)
+        greedy_actions, greedy_action_indices = group_argmax(action_values, index, return_indices=True)
         random_actions, random_action_indices = \
-            FlexibleCategorical(logits=torch.ones_like(action_values), index=index).sample(return_sample_indices=True)
+            GroupCategorical(logits=torch.ones_like(action_values), index=index).sample(return_indices=True)
         act_greedy = torch.rand_like(greedy_actions.to(torch.float32)) > eps
         actions = act_greedy * greedy_actions + ~act_greedy * random_actions
         if not training:
@@ -178,7 +159,7 @@ class DQN(IndependentAgents):
         action_indices_bool = action_indices_bool.to(torch.bool)
         return actions.cpu().tolist(), action_indices_bool.cpu()
 
-    def train_env(self, environment: MultiprocessingMarlEnvironment, episodes: int = 100):
+    def train_env(self, environment: MultiprocessingMarlEnvironment, episodes: int = 100, checkpoint_path: str = None):
         eps_greedy = ExpDecayEpsGreedyStrategy(self.eps_greedy_start, self.eps_greedy_end, self.eps_greedy_steps)
         highest_avg_reward = None
         for episode in range(episodes):
@@ -202,11 +183,11 @@ class DQN(IndependentAgents):
             avg_reward = torch.mean(torch.tensor(episode_rewards))
             print(f"--- Episode: {episode}   Reward: {avg_reward}   Epsilon: {eps_greedy.get_current_eps()}   "
                   f"Steps: {environment.n_steps} ---")
-            if self.save_checkpoint and \
+            if checkpoint_path is not None and \
                     (highest_avg_reward is None or highest_avg_reward <= avg_reward):
                 print(f"Save Checkpoint..")
                 highest_avg_reward = avg_reward
-                torch.save(self.state_dict(), self.checkpoint_path)
+                torch.save(self.state_dict(), checkpoint_path)
         environment.close()
 
     def _update_replay_buffer(self, states: Batch, action_indices: torch.BoolTensor, rewards: torch.Tensor,
@@ -239,7 +220,7 @@ class DQN(IndependentAgents):
         # Use Double Q-Learning Target
         action_values_local, index = self.online_q_network(next_states)
         action_values_target, _ = self.target_q_network(next_states)
-        _, next_greedy_action_indices = argmax_aggr(action_values_local, index, return_argmax_indices=True)
+        _, next_greedy_action_indices = group_argmax(action_values_local, index, return_indices=True)
         next_greedy_action_values = action_values_target[next_greedy_action_indices]
         q_targets = rewards + self.discount_factor * next_greedy_action_values
         return q_targets.detach()
@@ -254,7 +235,9 @@ class DQN(IndependentAgents):
         for target_param, local_param in zip(self.target_q_network.parameters(), self.online_q_network.parameters()):
             target_param.data.copy_(self.tau * local_param.data + (1.0 - self.tau) * target_param.data)
 
-    def demo_env(self, environment: MarlEnvironment):
+    def demo_env(self, environment: MarlEnvironment, checkpoint_path: str = None):
+        if checkpoint_path is not None:
+            self.load_state_dict(torch.load(checkpoint_path, map_location=device))
         state = environment.reset()
         while True:
             state = state.to(device)
@@ -278,10 +261,7 @@ class A2C(IndependentAgents):
             actor_loss_weight: float = 1.0,
             critic_loss_weight: float = 1.0,
             entropy_loss_weight: float = 0.001,
-            gradient_clipping_max_norm: float = 1.0,
-            checkpoint_dir: str = None,
-            save_checkpoint: bool = False,
-            load_checkpoint: bool = False
+            gradient_clipping_max_norm: float = 1.0
     ):
         super(A2C, self).__init__()
         self.shared = share_network
@@ -307,17 +287,6 @@ class A2C(IndependentAgents):
         self.apply(self._init_params)
         self.to(device)
 
-        if checkpoint_dir is not None:
-            Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
-            self.checkpoint_path = os.path.join(checkpoint_dir, "actor-critic-checkpoint.pt")
-            self.save_checkpoint = save_checkpoint
-            self.load_checkpoint = load_checkpoint
-        else:
-            self.save_checkpoint = False
-            self.load_checkpoint = False
-        if self.load_checkpoint:
-            self.load_state_dict(torch.load(self.checkpoint_path, map_location=device))
-
     def forward(self, state: HeteroData, actor_out: bool = True, critic_out: bool = True) -> \
             Tuple[torch.Tensor, torch.Tensor, torch.LongTensor]:
         if self.shared:
@@ -335,8 +304,8 @@ class A2C(IndependentAgents):
 
     def full_path(self, state: HeteroData) -> Tuple[List[int], torch.Tensor, torch.Tensor, torch.Tensor]:
         logits, values, index = self.forward(state)
-        distribution = FlexibleCategorical(logits, index)
-        actions, action_indices = distribution.sample(return_sample_indices=True)
+        distribution = GroupCategorical(logits, index)
+        actions, action_indices = distribution.sample(return_indices=True)
         log_probs = distribution.log_prob(action_indices)
         entropy = distribution.entropy()
         return actions.cpu().numpy().tolist(), log_probs, values, entropy
@@ -352,13 +321,13 @@ class A2C(IndependentAgents):
     def act(self, state: HeteroData, greedy: bool = False) -> List[int]:
         if greedy:
             logits, _, index = self.forward(state, critic_out=False)
-            actions = argmax_aggr(logits, index)
+            actions = group_argmax(logits, index)
             return actions.cpu().numpy().tolist()
         state = state
         actions = self.full_path(state)[0]
         return actions
 
-    def train_env(self, environment: MultiprocessingMarlEnvironment, episodes: int = 100):
+    def train_env(self, environment: MultiprocessingMarlEnvironment, episodes: int = 100, checkpoint_path: str = None):
         highest_avg_reward = None
         for episode in range(episodes):
             episode_rewards = []
@@ -391,11 +360,10 @@ class A2C(IndependentAgents):
             avg_entropy = torch.mean(torch.cat(episode_entropies, dim=0)).item()
             print(f"--- Episode: {episode}   Reward: {avg_reward}   Entropy: {avg_entropy}   "
                   f"Steps: {environment.n_steps} ---")
-            if self.save_checkpoint and \
-                    (highest_avg_reward is None or highest_avg_reward <= avg_reward):
+            if checkpoint_path is not None and (highest_avg_reward is None or highest_avg_reward <= avg_reward):
                 print(f"Save Checkpoint..")
                 highest_avg_reward = avg_reward
-                torch.save(self.state_dict(), self.checkpoint_path)
+                torch.save(self.state_dict(), checkpoint_path)
 
         environment.close()
 
@@ -428,7 +396,9 @@ class A2C(IndependentAgents):
         self.optimizer_c.step()
         self.optimizer_a.step()
 
-    def demo_env(self, environment: MarlEnvironment):
+    def demo_env(self, environment: MarlEnvironment, checkpoint_path: str = None):
+        if checkpoint_path is not None:
+            self.load_state_dict(torch.load(checkpoint_path, map_location=device))
         state = environment.reset()
         while True:
             state = state.to(device)

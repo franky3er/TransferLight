@@ -11,10 +11,10 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 if __name__ == "__main__":
     #scenarios_dir = os.path.join(SCENARIOS_ROOT, "grid", "1x1-500m", "train")
-    #scenarios_dir = os.path.join(SCENARIOS_ROOT, "grid", "3x3-150m", "train")
-    scenarios_dir = os.path.join(SCENARIOS_ROOT, "train", "coordinated")
+    scenarios_dir = os.path.join(SCENARIOS_ROOT, "grid", "3x3-150m", "train")
+    #scenarios_dir = os.path.join(SCENARIOS_ROOT, "train", "coordinated")
 
-    #environment = MarlEnvironment(scenarios_dir, 900, "MaxPressureProblemFormulation", use_default=False, demo=True)
+    max_pressure_environment = MarlEnvironment(scenarios_dir, 900, "MaxPressureProblemFormulation", use_default=False, demo=True)
     environment = MarlEnvironment(scenarios_dir, 500, "GeneraLightProblemFormulation", use_default=False, demo=True)
 
     input_dim = 10
@@ -49,10 +49,6 @@ if __name__ == "__main__":
     }
 
 
-    #agents = MaxPressure(20)
-    agents = A2C(network, actor_head, critic_head, share_network=True, checkpoint_dir=os.path.join("agents", "A2C"), load_checkpoint=True)
-    #agents = DQN(network, dqn_head, discount_factor=0.9, batch_size=128, replay_buffer_size=10_000, learning_rate=0.001,
-    #             eps_greedy_start=1.0, eps_greedy_end=0.1, eps_greedy_steps=10_000, tau=0.01,
-    #             checkpoint_dir=os.path.join("agents", "DQN"), load_checkpoint=True)
-    agents.demo_env(environment)
-
+    #MaxPressure(20).demo_env(max_pressure_environment)
+    A2C(network, actor_head, critic_head, share_network=True).demo_env(environment, checkpoint_path="agents/A2C/actor-critic-checkpoint.pt")
+    #DQN(network, dqn_head, discount_factor=0.9, batch_size=128, replay_buffer_size=10_000, learning_rate=0.001, eps_greedy_start=1.0, eps_greedy_end=0.1, eps_greedy_steps=10_000, tau=0.01).demo_env(environment, checkpoint_path="agents/DQN/dqn-checkpoint.pt")

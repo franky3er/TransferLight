@@ -55,7 +55,7 @@ class ProblemFormulation(ABC):
             logic = traci.trafficlight.getCompleteRedYellowGreenDefinition(intersection_id)[1]
             phase = logic.phases[phase_idx]
             state = phase.state
-            for i, s in [(i, s) for i, s in enumerate([*state]) if s == "G" or s == "g"]:
+            for i, s in [(i, s) for i, s in enumerate([*state])]:
                 controlled_links = traci.trafficlight.getControlledLinks(intersection_id)
                 controlled_links = controlled_links[i]
                 incoming_lane_id, outgoing_lane_id, _ = controlled_links[0]
@@ -64,8 +64,10 @@ class ProblemFormulation(ABC):
                     outgoing_lane.getEdge().getID()
                 phase = (intersection_id, phase_idx)
                 movement = (incoming_approach_id, intersection_id, outgoing_approach_id)
+                prohibited = True if s == "r" else False
+                permitted = True if s == "g" else False
                 protected = True if s == "G" else False
-                params = {"protected": protected}
+                params = {"prohibited": prohibited, "permitted": permitted, "protected": protected}
                 if movement not in self.phase_movements[phase]:
                     self.phase_movements[phase].append(movement)
                     self.phase_movement_params[(phase, movement)] = params
@@ -225,9 +227,10 @@ class MaxPressureProblemFormulation(ProblemFormulation):
         data = HeteroData()
         x = []
         for phase, movements in self.phase_movements.items():
-            incoming_lanes = set(incoming_lane for movement in movements
+            relevant_movements = [m for m in movements if not self.phase_movement_params[(phase, m)]["prohibited"]]
+            incoming_lanes = set(incoming_lane for movement in relevant_movements
                                  for incoming_lane, _, _ in self.movements[movement])
-            outgoing_lanes = set(outgoing_lane for movement in movements
+            outgoing_lanes = set(outgoing_lane for movement in relevant_movements
                                  for _, _, outgoing_lane in self.movements[movement])
             incoming_lanes_veh = sum([traci.lane.getLastStepHaltingNumber(lane_id) for lane_id in incoming_lanes])
             outgoing_lanes_veh = sum([traci.lane.getLastStepHaltingNumber(lane_id) for lane_id in outgoing_lanes])
@@ -383,8 +386,8 @@ class GeneraLightProblemFormulation(ProblemFormulation):
         for movement, phase in [(list(self.movements.keys())[m], self.phases[p])
                                 for m, p in self.edge_index_movement_to_phase]:
             params = self.phase_movement_params[(phase, movement)]
-            protected = params["protected"]
-            self.edge_attr_movement_to_phase.append([float(protected)])
+            edge_attr = [float(params["prohibited"]), float(params["permitted"]), float(params["protected"])]
+            self.edge_attr_movement_to_phase.append(edge_attr)
         self.edge_attr_movement_to_phase = torch.tensor(self.edge_attr_movement_to_phase)
 
         self.edge_attr_phase_to_phase = []
@@ -415,7 +418,7 @@ class GeneraLightProblemFormulation(ProblemFormulation):
         edge_dim[("lane_segment", "to", "lane")] = 1
         edge_dim[("lane", "to_downstream", "movement")] = 1
         edge_dim[("lane", "to_upstream", "movement")] = 1
-        edge_dim[("movement", "to", "phase")] = 1
+        edge_dim[("movement", "to", "phase")] = 3
         edge_dim[("phase", "to", "phase")] = 1
         metadata["edge_dim"] = edge_dim
 

@@ -8,7 +8,7 @@ from torch_geometric.data import HeteroData
 from torch_geometric.typing import Adj
 
 from src.rl.problem_formulations import GeneraLightProblemFormulation
-from src.modules.message_passing import (GeneraLightLaneDemandEmbedding,
+from src.modules.network_modules import (GeneraLightLaneDemandEmbedding,
                                          GeneraLightMovementDemandEmbedding,
                                          GeneraLightPhaseDemandEmbedding,
                                          GeneraLightIntersectionDemandEmbedding)
@@ -40,8 +40,7 @@ class GeneraLightNetwork(NetworkBody):
             lane_segment_to_lane_edge_dim=edge_dim[("lane_segment", "to", "lane")],
             output_dim=output_dim,
             heads=n_attention_heads,
-            n_layer_message=n_residuals,
-            n_layer_update=n_residuals
+            n_residuals=n_residuals
         )
         self.movement_demand_embedding = GeneraLightMovementDemandEmbedding(
             lane_dim=output_dim,
@@ -52,9 +51,7 @@ class GeneraLightNetwork(NetworkBody):
             movement_to_movement_hops=2,
             output_dim=output_dim,
             heads=n_attention_heads,
-            n_layer_update=n_residuals,
-            n_layer_message=n_residuals,
-            n_layer_output=n_residuals
+            n_residuals=n_residuals
         )
         self.phase_demand_embedding = GeneraLightPhaseDemandEmbedding(
             movement_dim=output_dim,
@@ -63,8 +60,7 @@ class GeneraLightNetwork(NetworkBody):
             phase_to_phase_edge_dim=edge_dim[("phase", "to", "phase")],
             output_dim=output_dim,
             heads=n_attention_heads,
-            n_layer_message=n_residuals,
-            n_layer_update=n_residuals
+            n_residuals=n_residuals
         )
         self.intersection_demand_embedding = GeneraLightIntersectionDemandEmbedding(
             movement_dim=output_dim,
@@ -72,20 +68,19 @@ class GeneraLightNetwork(NetworkBody):
             movement_to_intersection_edge_dim=edge_dim[("movement", "to", "intersection")],
             output_dim=output_dim,
             heads=n_attention_heads,
-            n_layer_message=n_residuals,
-            n_layer_update=n_residuals
+            n_residuals=n_residuals
         )
 
     def forward(self, state: HeteroData) -> Tuple[torch.Tensor, torch.Tensor, torch.LongTensor]:
-        lane_demand_embedding = self.lane_demand_embedding(
+        lane_embedding = self.lane_demand_embedding(
             state["lane_segment"].x if self.node_dim["lane_segment"] > 0 else None,
             state["lane"].x if self.node_dim["lane"] > 0 else None,
             state["lane_segment", "to", "lane"].edge_attr
             if self.edge_dim[("lane_segment", "to", "lane")] > 0 else None,
             state["lane_segment", "to", "lane"].edge_index
         )
-        movement_demand_embedding = self.movement_demand_embedding(
-            lane_demand_embedding,
+        movement_embedding = self.movement_demand_embedding(
+            lane_embedding,
             state["movement"].x if self.node_dim["movement"] > 0 else None,
             state["lane", "to_downstream", "movement"].edge_attr
             if self.edge_dim[("lane", "to_downstream", "movement")] > 0 else None,
@@ -97,21 +92,22 @@ class GeneraLightNetwork(NetworkBody):
             state["lane", "to_upstream", "movement"].edge_index,
             state["movement", "to", "movement"].edge_index
         )
-        action_embedding = self.phase_demand_embedding(
-            movement_demand_embedding,
+        phase_embedding = self.phase_demand_embedding(
+            movement_embedding,
             state["phase"].x if self.node_dim["phase"] > 0 else None,
             state["movement", "to", "phase"].edge_attr if self.edge_dim[("movement", "to", "phase")] > 0 else None,
             state["phase", "to", "phase"].edge_attr if self.edge_dim[("phase", "to", "phase")] > 0 else None,
             state["movement", "to", "phase"].edge_index,
             state["phase", "to", "phase"].edge_index
         )
-        agent_embedding = self.intersection_demand_embedding(
-            movement_demand_embedding,
+        intersection_embedding = self.intersection_demand_embedding(
+            movement_embedding,
             state["intersection"].x if self.node_dim["intersection"] > 0 else None,
             state["movement", "to", "intersection"].edge_attr
             if self.edge_dim[("movement", "to", "intersection")] > 0 else None,
             state["movement", "to", "intersection"].edge_index
         )
+        agent_embedding, action_embedding = intersection_embedding, phase_embedding
         index = state["phase", "to", "intersection"].edge_index[1]
         return agent_embedding, action_embedding, index
 
