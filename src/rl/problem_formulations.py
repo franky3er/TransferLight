@@ -340,47 +340,47 @@ class GeneraLightProblemFormulation(ProblemFormulation):
         self.edge_attr_lane_segment_to_lane = torch.tensor(
             self.edge_attr_lane_segment_to_lane)
 
-        self.edge_index_lane_to_downstream_movement = []
-        self.edge_index_lane_to_upstream_movement = []
-        self.edge_attr_lane_to_downstream_movement = []
-        self.edge_attr_lane_to_upstream_movement = []
-        for movement in self.movements.keys():
-            movement_incoming_lanes = set([incoming_lane for incoming_lane, _, _ in self.movements[movement]])
-            incoming_lanes = [lane.getID() for lane in self.net.getEdge(movement[0]).getLanes()]
-            incoming_involved = [1 if lane_id in movement_incoming_lanes else 0 for lane_id in incoming_lanes]
-            incoming_involved_start = incoming_involved.index(1)
-            incoming_involved_end = len(incoming_lanes) - list(reversed(incoming_involved)).index(1) - 1
-            n_incoming = len(incoming_lanes)
-            n_left_incoming_uninvolved = incoming_involved_start
-            n_incoming_involved = incoming_involved_end - incoming_involved_start + 1
-            n_right_incoming_uninvolved = n_incoming - n_left_incoming_uninvolved - n_incoming_involved
-            incoming_lanes_relative_pos = \
-                list(reversed(range(1, n_left_incoming_uninvolved + 1))) + \
-                [0 for _ in range(n_incoming_involved)] + \
-                list(range(1, n_right_incoming_uninvolved + 1))
-            for lane_id, rel_pos in zip(incoming_lanes, incoming_lanes_relative_pos):
-                self.edge_index_lane_to_downstream_movement.append((self.lanes.index(lane_id),
-                                                                    list(self.movements.keys()).index(movement)))
-                self.edge_attr_lane_to_downstream_movement.append([rel_pos])
-            movement_outgoing_lanes = set([outgoing_lane for _, _, outgoing_lane in self.movements[movement]])
-            outgoing_lanes = [lane.getID() for lane in self.net.getEdge(movement[2]).getLanes()]
-            outgoing_involved = [1 if lane_id in movement_outgoing_lanes else 0 for lane_id in outgoing_lanes]
-            outgoing_involved_start = outgoing_involved.index(1)
-            outgoing_involved_end = len(outgoing_lanes) - list(reversed(outgoing_involved)).index(1) - 1
-            n_outgoing = len(outgoing_lanes)
-            n_left_outgoing_uninvolved = outgoing_involved_start
-            n_outgoing_involved = outgoing_involved_end - incoming_involved_start + 1
-            n_right_outgoing_uninvolved = n_outgoing - n_left_outgoing_uninvolved - n_outgoing_involved
-            outgoing_lanes_relative_pos = \
-                list(reversed(range(1, n_left_outgoing_uninvolved + 1))) + \
-                [0 for _ in range(n_outgoing_involved)] + \
-                list(range(1, n_right_outgoing_uninvolved + 1))
-            for lane_id, rel_pos in zip(outgoing_lanes, outgoing_lanes_relative_pos):
-                self.edge_index_lane_to_upstream_movement.append((self.lanes.index(lane_id),
-                                                                  list(self.movements.keys()).index(movement)))
-                self.edge_attr_lane_to_upstream_movement.append([rel_pos])
-        self.edge_attr_lane_to_downstream_movement = torch.tensor(self.edge_attr_lane_to_downstream_movement)
-        self.edge_attr_lane_to_upstream_movement = torch.tensor(self.edge_attr_lane_to_upstream_movement)
+        #self.edge_index_lane_to_downstream_movement = []
+        #self.edge_index_lane_to_upstream_movement = []
+        #self.edge_attr_lane_to_downstream_movement = []
+        #self.edge_attr_lane_to_upstream_movement = []
+        #for movement in self.movements.keys():
+        #    movement_incoming_lanes = set([incoming_lane for incoming_lane, _, _ in self.movements[movement]])
+        #    incoming_lanes = [lane.getID() for lane in self.net.getEdge(movement[0]).getLanes()]
+        #    incoming_involved = [1 if lane_id in movement_incoming_lanes else 0 for lane_id in incoming_lanes]
+        #    incoming_involved_start = incoming_involved.index(1)
+        #    incoming_involved_end = len(incoming_lanes) - list(reversed(incoming_involved)).index(1) - 1
+        #    n_incoming = len(incoming_lanes)
+        #    n_left_incoming_uninvolved = incoming_involved_start
+        #    n_incoming_involved = incoming_involved_end - incoming_involved_start + 1
+        #    n_right_incoming_uninvolved = n_incoming - n_left_incoming_uninvolved - n_incoming_involved
+        #    incoming_lanes_relative_pos = \
+        #        list(reversed(range(1, n_left_incoming_uninvolved + 1))) + \
+        #        [0 for _ in range(n_incoming_involved)] + \
+        #        list(range(1, n_right_incoming_uninvolved + 1))
+        #    for lane_id, rel_pos in zip(incoming_lanes, incoming_lanes_relative_pos):
+        #        self.edge_index_lane_to_downstream_movement.append((self.lanes.index(lane_id),
+        #                                                            list(self.movements.keys()).index(movement)))
+        #        self.edge_attr_lane_to_downstream_movement.append([rel_pos])
+        #    movement_outgoing_lanes = set([outgoing_lane for _, _, outgoing_lane in self.movements[movement]])
+        #    outgoing_lanes = [lane.getID() for lane in self.net.getEdge(movement[2]).getLanes()]
+        #    outgoing_involved = [1 if lane_id in movement_outgoing_lanes else 0 for lane_id in outgoing_lanes]
+        #    outgoing_involved_start = outgoing_involved.index(1)
+        #    outgoing_involved_end = len(outgoing_lanes) - list(reversed(outgoing_involved)).index(1) - 1
+        #    n_outgoing = len(outgoing_lanes)
+        #    n_left_outgoing_uninvolved = outgoing_involved_start
+        #    n_outgoing_involved = outgoing_involved_end - incoming_involved_start + 1
+        #    n_right_outgoing_uninvolved = n_outgoing - n_left_outgoing_uninvolved - n_outgoing_involved
+        #    outgoing_lanes_relative_pos = \
+        #        list(reversed(range(1, n_left_outgoing_uninvolved + 1))) + \
+        #        [0 for _ in range(n_outgoing_involved)] + \
+        #        list(range(1, n_right_outgoing_uninvolved + 1))
+        #    for lane_id, rel_pos in zip(outgoing_lanes, outgoing_lanes_relative_pos):
+        #        self.edge_index_lane_to_upstream_movement.append((self.lanes.index(lane_id),
+        #                                                          list(self.movements.keys()).index(movement)))
+        #        self.edge_attr_lane_to_upstream_movement.append([rel_pos])
+        #self.edge_attr_lane_to_downstream_movement = torch.tensor(self.edge_attr_lane_to_downstream_movement)
+        #self.edge_attr_lane_to_upstream_movement = torch.tensor(self.edge_attr_lane_to_upstream_movement)
 
         self.edge_attr_movement_to_phase = []
         for movement, phase in [(list(self.movements.keys())[m], self.phases[p])
@@ -396,8 +396,8 @@ class GeneraLightProblemFormulation(ProblemFormulation):
             phase_i_movements = self.phase_movements[phase_i]
             intersection_movements = set(phase_j_movements).intersection(set(phase_i_movements))
             union_movements = set(phase_j_movements).union(set(phase_i_movements))
-            overlap = len(intersection_movements) / len(union_movements)
-            self.edge_attr_phase_to_phase.append([overlap])
+            overlap = (len(intersection_movements) / len(union_movements)) > 0.0
+            self.edge_attr_phase_to_phase.append([float(overlap)])
         self.edge_attr_phase_to_phase = torch.tensor(self.edge_attr_phase_to_phase)
 
         #self.prev_lane_segment_x = None
@@ -416,8 +416,8 @@ class GeneraLightProblemFormulation(ProblemFormulation):
 
         edge_dim = defaultdict(lambda: 0)
         edge_dim[("lane_segment", "to", "lane")] = 1
-        edge_dim[("lane", "to_downstream", "movement")] = 1
-        edge_dim[("lane", "to_upstream", "movement")] = 1
+        #edge_dim[("lane", "to_downstream", "movement")] = 1
+        #edge_dim[("lane", "to_upstream", "movement")] = 1
         edge_dim[("movement", "to", "phase")] = 3
         edge_dim[("phase", "to", "phase")] = 1
         metadata["edge_dim"] = edge_dim
@@ -453,8 +453,8 @@ class GeneraLightProblemFormulation(ProblemFormulation):
 
         # Edge Features
         data["lane_segment", "to", "lane"].edge_attr = self.edge_attr_lane_segment_to_lane
-        data["lane", "to_downstream", "movement"].edge_attr = self.edge_attr_lane_to_downstream_movement
-        data["lane", "to_upstream", "movement"].edge_attr = self.edge_attr_lane_to_upstream_movement
+        #data["lane", "to_downstream", "movement"].edge_attr = self.edge_attr_lane_to_downstream_movement
+        #data["lane", "to_upstream", "movement"].edge_attr = self.edge_attr_lane_to_upstream_movement
         data["movement", "to", "phase"].edge_attr = self.edge_attr_movement_to_phase
         data["phase", "to", "phase"].edge_attr = self.edge_attr_phase_to_phase
 

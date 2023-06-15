@@ -49,11 +49,9 @@ class GeneraLightMovementDemandEmbedding(nn.Module):
     ):
         super(GeneraLightMovementDemandEmbedding, self).__init__()
         self.incoming_approach_embedding = HeteroNeighborhoodAttention(
-            lane_dim, movement_dim, lane_to_downstream_movement_edge_dim, output_dim, heads, n_residuals,
-            positional_encoding_method="alibi")
+            lane_dim, movement_dim, lane_to_downstream_movement_edge_dim, output_dim, heads, n_residuals)
         self.outgoing_approach_embedding = HeteroNeighborhoodAttention(
-            lane_dim, movement_dim, lane_to_upstream_movement_edge_dim, output_dim, heads, n_residuals,
-            positional_encoding_method="alibi")
+            lane_dim, movement_dim, lane_to_upstream_movement_edge_dim, output_dim, heads, n_residuals)
         self.combined_movement_embedding = ResidualStack(2 * output_dim, output_dim, n_residuals,
                                                          last_activation=True)
         self.movement_to_movement_embedding = nn.ModuleList()
