@@ -114,7 +114,8 @@ class HeteroNeighborhoodAttention(HeteroMessagePassing):
             heads: int,
             n_residuals: int = 2,
             positional_encoding_method: str = None,
-            skip_connection: bool = False
+            skip_connection: bool = False,
+            dropout_prob: float = 0.0
     ):
         super(HeteroNeighborhoodAttention, self).__init__(aggr_fn="sum")
         assert n_residuals >= 1
@@ -136,15 +137,18 @@ class HeteroNeighborhoodAttention(HeteroMessagePassing):
             edge_dim = edge_dim - 1
             input_dim = src_dim + dst_dim + edge_dim
             max_len = 10
-            self.input_layer = ResidualStack(input_dim, output_dim, 1)
+            self.input_layer = ResidualStack(input_dim, output_dim, 1, dropout_prob=dropout_prob)
             self.pos_embedding = nn.Embedding(num_embeddings=max_len, embedding_dim=output_dim)
             self.pos_embedding.weight.data.uniform_(-0.1, 0.1)
             input_dim = output_dim
 
         self.q = nn.Parameter(data=torch.rand(1, output_dim) * 0.1, requires_grad=True)
-        self.k_layers = ResidualStack(input_dim, output_dim, n_residuals, last_activation=False)
-        self.v_layers = ResidualStack(input_dim, output_dim, n_residuals, last_activation=False)
-        self.out_layers = ResidualStack(output_dim, output_dim, n_residuals, last_activation=not skip_connection)
+        self.k_layers = ResidualStack(input_dim, output_dim, n_residuals, last_activation=False,
+                                      dropout_prob=dropout_prob)
+        self.v_layers = ResidualStack(input_dim, output_dim, n_residuals, last_activation=False,
+                                      dropout_prob=dropout_prob)
+        self.out_layers = ResidualStack(output_dim, output_dim, n_residuals, last_activation=not skip_connection,
+                                        dropout_prob=dropout_prob)
         if skip_connection:
             self.identity = nn.Identity() if dst_dim == output_dim else nn.Linear(dst_dim, output_dim, bias=False)
         self.skip_connection = skip_connection
@@ -232,15 +236,19 @@ class HomoNeighborhoodAttention(HomoMessagePassing):
             output_dim: int,
             heads: int,
             n_residuals: int = 2,
-            skip_connection: bool = True
+            skip_connection: bool = True,
+            dropout_prob: float = 0.0,
     ):
         super(HomoMessagePassing, self).__init__(aggr_fn="sum")
         combined_input_dim = 2 * input_dim + edge_dim
         self.heads = heads
         self.q = nn.Parameter(data=torch.rand(1, output_dim) * 0.1, requires_grad=True)
-        self.k_layers = ResidualStack(combined_input_dim, output_dim, n_residuals, last_activation=False)
-        self.v_layers = ResidualStack(combined_input_dim, output_dim, n_residuals, last_activation=False)
-        self.out_layers = ResidualStack(output_dim, output_dim, n_residuals, last_activation=not skip_connection)
+        self.k_layers = ResidualStack(combined_input_dim, output_dim, n_residuals, last_activation=False,
+                                      dropout_prob=dropout_prob)
+        self.v_layers = ResidualStack(combined_input_dim, output_dim, n_residuals, last_activation=False,
+                                      dropout_prob=dropout_prob)
+        self.out_layers = ResidualStack(output_dim, output_dim, n_residuals, last_activation=not skip_connection,
+                                        dropout_prob=dropout_prob)
         if skip_connection:
             self.identity = nn.Identity() if input_dim == output_dim else nn.Linear(input_dim, output_dim, bias=False)
         self.skip_connection = skip_connection

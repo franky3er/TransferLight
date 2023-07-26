@@ -15,12 +15,13 @@ class GeneraLightLaneDemandEmbedding(nn.Module):
             lane_segment_to_lane_edge_dim: int,
             output_dim: int,
             heads: int,
-            n_residuals: int
+            n_residuals: int,
+            dropout_prob: float
     ):
         super(GeneraLightLaneDemandEmbedding, self).__init__()
         self.lane_demand_embedding = HeteroNeighborhoodAttention(
             lane_segment_dim, lane_dim, lane_segment_to_lane_edge_dim, output_dim, heads, n_residuals,
-            positional_encoding_method="alibi")
+            dropout_prob=dropout_prob)
 
     def forward(
             self,
@@ -45,19 +46,23 @@ class GeneraLightMovementDemandEmbedding(nn.Module):
             movement_to_movement_hops: int,
             output_dim: int,
             heads: int,
-            n_residuals: int
+            n_residuals: int,
+            dropout_prob: float
     ):
         super(GeneraLightMovementDemandEmbedding, self).__init__()
         self.incoming_approach_embedding = HeteroNeighborhoodAttention(
-            lane_dim, movement_dim, lane_to_downstream_movement_edge_dim, output_dim, heads, n_residuals)
+            lane_dim, movement_dim, lane_to_downstream_movement_edge_dim, output_dim, heads, n_residuals,
+            dropout_prob=dropout_prob)
         self.outgoing_approach_embedding = HeteroNeighborhoodAttention(
-            lane_dim, movement_dim, lane_to_upstream_movement_edge_dim, output_dim, heads, n_residuals)
+            lane_dim, movement_dim, lane_to_upstream_movement_edge_dim, output_dim, heads, n_residuals,
+            dropout_prob=dropout_prob)
         self.combined_movement_embedding = ResidualStack(2 * output_dim, output_dim, n_residuals,
-                                                         last_activation=True)
+                                                         last_activation=True, dropout_prob=dropout_prob)
         self.movement_to_movement_embedding = nn.ModuleList()
         for _ in range(movement_to_movement_hops):
             self.movement_to_movement_embedding.append(
-                HomoNeighborhoodAttention(output_dim, movement_to_movement_edge_dim, output_dim, heads, n_residuals)
+                HomoNeighborhoodAttention(output_dim, movement_to_movement_edge_dim, output_dim, heads, n_residuals,
+                                          dropout_prob=dropout_prob)
             )
 
     def forward(
@@ -93,14 +98,15 @@ class GeneraLightPhaseDemandEmbedding(nn.Module):
             phase_to_phase_edge_dim: int,
             output_dim: int,
             heads: int,
-            n_residuals: int
+            n_residuals: int,
+            dropout_prob: float
     ):
         super(GeneraLightPhaseDemandEmbedding, self).__init__()
         self.phase_demand_embedding = HeteroNeighborhoodAttention(
             movement_dim, phase_dim, movement_to_phase_edge_dim, output_dim, heads, n_residuals,
-            positional_encoding_method=None)
+            dropout_prob=dropout_prob)
         self.phase_competition = HomoNeighborhoodAttention(
-            output_dim, phase_to_phase_edge_dim, output_dim, heads, n_residuals
+            output_dim, phase_to_phase_edge_dim, output_dim, heads, n_residuals, dropout_prob=dropout_prob
         )
 
     def forward(self, movement_x: torch.Tensor, phase_x: torch.Tensor, movement_to_phase_edge_attr: torch.Tensor,
@@ -120,11 +126,14 @@ class GeneraLightIntersectionDemandEmbedding(nn.Module):
             movement_to_intersection_edge_dim: int,
             output_dim: int,
             heads: int,
-            n_residuals: int
+            n_residuals: int,
+            dropout_prob: float
     ):
         super(GeneraLightIntersectionDemandEmbedding, self).__init__()
         self.intersection_demand_embedding = HeteroNeighborhoodAttention(
-            movement_dim, intersection_dim, movement_to_intersection_edge_dim, output_dim, heads, n_residuals
+            movement_dim, intersection_dim, movement_to_intersection_edge_dim, output_dim, heads, n_residuals,
+            dropout_prob=dropout_prob
+
         )
 
     def forward(

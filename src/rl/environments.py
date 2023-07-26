@@ -2,14 +2,16 @@ from abc import ABC, abstractmethod
 import itertools
 import os
 import random
-from typing import Any, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
 import libsumo as traci
 import numpy as np
+import pandas as pd
 import sumolib.net
 import torch
 from torch import multiprocessing as mp
 from torch_geometric.data import Batch, Data, HeteroData
+from torch_geometric.data.data import BaseData
 
 from src.params import ENV_ACTION_EXECUTION_TIME, ENV_YELLOW_TIME, ENV_RED_TIME
 from src.rl.problem_formulations import ProblemFormulation
@@ -23,6 +25,18 @@ class Environment(ABC):
 
     @abstractmethod
     def step(self, actions: List[int]) -> Tuple[Any, torch.Tensor, bool]:
+        pass
+
+    @abstractmethod
+    def state(self) -> BaseData:
+        pass
+
+    @abstractmethod
+    def metadata(self) -> Dict:
+        pass
+
+    @abstractmethod
+    def statistics(self) -> pd.DataFrame:
         pass
 
     @abstractmethod
@@ -52,12 +66,20 @@ class MarlEnvironment(Environment):
         self.sumo = "sumo-gui" if demo else "sumo"
         self.max_patience = max_patience
         self.use_default = use_default
-        self.current_step = 0
-        self.current_episode = 0
+        self.episode = None
+        self.action_step = 0
+        self.time_step = 0
+        self.episode_action_step = 0
+        self.episode_time_step = 0
+        self.trip_statistics = None
+        self.intersection_statistics = None
+        self.rewards = None
 
-    def reset(self, return_n_agents: bool = False, return_n_actions: bool = False) -> Any:
+    def reset(self) -> BaseData:
         self.close()
-        self.current_step = 0
+        self.episode = 0 if self.episode is None else self.episode + 1
+        self.episode_action_step = 0
+        self.episode_time_step = 0
         net_xml_path, rou_xml_path = next(self.scenarios)
         self.net_xml_path = net_xml_path
         sumo_cmd = [self.sumo, "-n", net_xml_path, "-r", rou_xml_path, "--time-to-teleport", str(-1), "--no-warnings"]
@@ -75,46 +97,111 @@ class MarlEnvironment(Environment):
                 new_logic = traci.trafficlight.Logic(f"{logic.programID}-new", logic.type, random_phase_idx, new_phases)
                 traci.trafficlight.setCompleteRedYellowGreenDefinition(tls.getID(), new_logic)
         self.problem_formulation = ProblemFormulation.create(self.problem_formulation_name, self.net)
-        signalized_intersections = self.problem_formulation.get_signalized_intersections()
-        n_agents = len(signalized_intersections)
-        n_actions = [len(self.problem_formulation.get_phases(intersection_id))
-                     for intersection_id in signalized_intersections]
         state = self.problem_formulation.get_state()
-        if not return_n_agents and not return_n_actions:
-            return state
-        out = [state]
-        out += [n_agents] if return_n_agents else []
-        out += [n_actions] if return_n_actions else []
-        return tuple(out)
+        return state
 
     def close(self):
         traci.close()
         self.problem_formulation = None
         self.net = None
-        self.current_step = 0
+        self.episode_action_step = 0
+        self.episode_time_step = 0
 
-    def step(self, actions: List[int]) -> Tuple[Any, torch.Tensor, bool]:
+    def step(self, actions: List[int], return_info: bool = False) \
+            -> Union[Tuple[BaseData, torch.Tensor, bool], Tuple[BaseData, torch.Tensor, bool, Dict]]:
         self._apply_actions(actions)
         state = self.problem_formulation.get_state()
         rewards = self.problem_formulation.get_rewards()
+        self.rewards = rewards
         max_waiting_time = self.problem_formulation.get_max_vehicle_waiting_time()
         if max_waiting_time > self.max_patience:
             print(f"max_waiting_time > max_patience   ({self.net_xml_path})")
         done = (True if traci.simulation.getMinExpectedNumber() == 0 or max_waiting_time > self.max_patience
                 else False)
+        if return_info:
+            return state, rewards, done, self.info()
         return state, rewards, done
+
+    def state(self) -> Batch:
+        return self.problem_formulation.get_state()
+
+    def metadata(self) -> Dict:
+        signalized_intersections = self.problem_formulation.get_signalized_intersections()
+        metadata = {
+            "n_agents": len(signalized_intersections),
+            "n_actions": sum([len(self.problem_formulation.get_phases(intersection_id))
+                              for intersection_id in signalized_intersections])
+        }
+        return metadata
+
+    def info(self) -> Dict:
+        info = {
+            "episode": self.episode,
+            "step": self.action_step,
+            "episode_step": self.episode_action_step,
+            "ema_reward": None
+        }
+        return info
+
+    def statistics(self) -> pd.DataFrame:
+        pass
 
     def _apply_actions(self, actions: List[int]):
         if self.use_default:
             self._apply_default_actions()
         else:
             self._apply_controlled_actions(actions)
-        self.current_step += 1
+        self.episode_action_step += 1
+        self.action_step += 1
 
-    @staticmethod
-    def _apply_default_actions():
+    def _update_statistics(self):
+        self._update_trip_statistics()
+        self._update_intersection_statistics()
+
+    def _update_trip_statistics(self):
+        trip_statistics = []
+        for vehicle in traci.vehicle.getIDList():
+            trip_statistics.append({
+                "net_xml_path": self.net_xml_path,
+                "episode": self.episode,
+                "time_step": self.time_step,
+                "action_step": self.action_step,
+                "episode_time_step": self.episode_time_step,
+                "episode_action_step": self.episode_action_step,
+                "vehicle": vehicle,
+                "distance": traci.vehicle.getDistance(vehicle),
+                "lane": traci.vehicle.getLaneID(vehicle),
+                "speed": traci.vehicle.getSpeed(vehicle),
+                "waiting_time": traci.vehicle.getWaitingTime(vehicle)
+            })
+        trip_statistics = pd.DataFrame(data=trip_statistics)
+        self.trip_statistics = trip_statistics if self.trip_statistics is None \
+            else pd.concat([self.trip_statistics, trip_statistics])
+
+    def _update_intersection_statistics(self):
+        intersection_statistics = []
+        for intersection in traci.trafficlight.getIDList():
+            intersection_statistics.append({
+                "net_xml_path": self.net_xml_path,
+                "episode": self.episode,
+                "time_step": self.time_step,
+                "action_step": self.action_step,
+                "episode_time_step": self.episode_time_step,
+                "episode_action_step": self.episode_action_step,
+                "intersection": intersection,
+                "pressure": self.problem_formulation.get_intersection_normalized_pressure(intersection),
+                "queue_length": self.problem_formulation.get_intersection_queue_length(intersection)
+            })
+        intersection_statistics = pd.DataFrame(data=intersection_statistics)
+        self.intersection_statistics = intersection_statistics if self.intersection_statistics is None \
+            else pd.concat([self.intersection_statistics, intersection_statistics])
+
+    def _apply_default_actions(self):
         for _ in range(ENV_ACTION_EXECUTION_TIME):
             traci.simulationStep()
+            self.episode_time_step += 1
+            self.time_step += 1
+            self._update_statistics()
 
     def _apply_controlled_actions(self, actions: List[int]):
         actions = [actions] if isinstance(actions, int) else actions
@@ -129,6 +216,9 @@ class MarlEnvironment(Environment):
             for signalized_intersection, transition_signals_ in zip(signalized_intersections, transition_signals):
                 traci.trafficlight.setRedYellowGreenState(signalized_intersection, transition_signals_[t])
             traci.simulationStep()
+            self.episode_time_step += 1
+            self.time_step += 1
+            self._update_statistics()
         for signalized_intersection, green_signal in zip(signalized_intersections, green_signals):
             traci.trafficlight.setRedYellowGreenState(signalized_intersection, green_signal)
 
@@ -173,53 +263,102 @@ class MultiprocessingMarlEnvironment(Environment):
         self.workers = [mp.Process(target=self.work, args=self._get_work_args(rank))
                         for rank in range(self.n_workers)]
         [worker.start() for worker in self.workers]
-        self.n_agents = None
+        self.worker_n_agents = None
+        self.worker_n_actions = None
         self.agent_worker_assignment = None
         self.n_steps = None
+        self.rewards = None
+        self.ema_reward = 0.0
+        self.ema_weight = 0.1
+        self.action_step = 0
+        self.episode = 0
 
     def _get_work_args(self, rank: int):
         skip_scenarios = [(s-rank) % self.n_workers != 0 for s in range(self.n_scenarios)]
         return rank, self.pipes[rank][1], self.scenarios_dir, self.traffic_representation_name, self.max_steps, \
             self.use_default, skip_scenarios
 
-    def reset(self, return_n_workers: bool = False, return_worker_offsets: bool = False) -> Any:
+    def reset(self) -> Batch:
         self.n_steps = 0
-        self.broadcast_msg(("reset", {"return_n_agents": True, "return_n_actions": True}))
+        self.broadcast_msg(("reset", {}))
         states = []
-        self.n_agents = []
-        self.agent_worker_assignment = []
-        worker_total_actions = []
         for rank in range(self.n_workers):
             parent_end, _ = self.pipes[rank]
-            state, n_agents, n_actions = parent_end.recv()
+            state = parent_end.recv()
             states.append(state)
-            self.n_agents.append(n_agents)
-            worker_total_actions.append(sum(n_actions))
-        self.agent_worker_assignment = list(itertools.chain(*([rank for _ in range(n_agents)]
-                                                              for rank, n_agents in enumerate(self.n_agents))))
+        self._update_internal_params()
         states = self._batch_states(states)
-        if not return_n_workers and not return_worker_offsets:
-            return states
-        worker_agent_offsets = np.cumsum(self.n_agents).tolist()
-        worker_action_offsets = np.cumsum(worker_total_actions).tolist()
-        out = [states]
-        out += [self.n_workers] if return_n_workers else []
-        out += [worker_agent_offsets, worker_action_offsets]
-        return tuple(out)
+        return states
 
     def step(self, actions: List[int]) -> Tuple[Batch, torch.Tensor, bool]:
         self.n_steps += 1
         actions = self._distribute_actions(actions)
-        [self.send_msg(("step", {"actions": actions[rank]}), rank) for rank in range(self.n_workers)]
+        [self.send_msg(("step", {"actions": actions[rank], "return_info": True}), rank)
+         for rank in range(self.n_workers)]
         states, rewards, dones = [], [], []
+        episodes = []
         for rank in range(self.n_workers):
             parent_end, _ = self.pipes[rank]
-            state, rewards_, done = parent_end.recv()
+            state, reward, done, info = parent_end.recv()
+            episodes.append(info["episode"])
+            if done:
+                self.send_msg(("reset", {}), rank)
+                _ = parent_end.recv()
             states.append(state)
-            rewards.append(rewards_)
+            rewards.append(reward)
             dones.append(done)
+        if any(dones):
+            self._update_internal_params()
         states, rewards, done = self._batch_states(states), self._batch_rewards(rewards), self._batch_dones(dones)
+        self.episode = np.array(episodes).min()
+        self.action_step += 1 if self.episode > 0 else 0
+        self.ema_reward = self.ema_weight * torch.mean(rewards).item() + (1.0 - self.ema_weight) * self.ema_reward
         return states, rewards, done
+
+    def state(self) -> Batch:
+        self.broadcast_msg(("state", {}))
+        states = []
+        for rank in range(self.n_workers):
+            parent_end, _ = self.pipes[rank]
+            state = parent_end.recv()
+            states.append(state)
+        states = self._batch_states(states)
+        return states
+
+    def metadata(self) -> Dict:
+        self.broadcast_msg(("metadata", {}))
+        metadata = {"n_agents": [], "n_actions": [], "episode": [], "episode_action_step": [], "episode_time_step": []}
+        for rank in range(self.n_workers):
+            parent_end, _ = self.pipes[rank]
+            md = parent_end.recv()
+            metadata["n_agents"].append(md["n_agents"])
+            metadata["n_actions"].append(md["n_actions"])
+        #metadata["episode"] = np.array(metadata["episode"]).min()
+        metadata["agent_offsets"] = np.cumsum(metadata["n_agents"]).tolist()
+        metadata["action_offsets"] = np.cumsum(metadata["n_actions"]).tolist()
+        metadata["n_workers"] = self.n_workers
+        return metadata
+
+    def info(self) -> Dict:
+        info = dict()
+        info["episode"] = self.episode
+        info["step"] = self.action_step
+        info["ema_reward"] = self.ema_reward
+        info["progress"] = f'--- Episode: {info["episode"]}  Step: {info["step"]}  EMA Reward: {info["ema_reward"]} ---'
+        return info
+
+    def _update_internal_params(self):
+        self.worker_n_agents = []
+        self.worker_n_actions = []
+        self.agent_worker_assignment = []
+        self.broadcast_msg(("metadata", {}))
+        for rank in range(self.n_workers):
+            parent_end, _ = self.pipes[rank]
+            metadata = parent_end.recv()
+            self.worker_n_agents.append(metadata["n_agents"])
+            self.worker_n_actions.append(metadata["n_actions"])
+        self.agent_worker_assignment = list(itertools.chain(*([rank for _ in range(n_agents)]
+                                                              for rank, n_agents in enumerate(self.worker_n_agents))))
 
     def _distribute_actions(self, actions: List[int]) -> List[List[int]]:
         actions_ = [[] for _ in range(self.n_workers)]
@@ -230,6 +369,9 @@ class MultiprocessingMarlEnvironment(Environment):
     def close(self):
         self.broadcast_msg(("close", {}))
         [worker.join() for worker in self.workers]
+
+    def statistics(self) -> pd.DataFrame:
+        pass
 
     @staticmethod
     def work(rank, worker_end, scenarios_dir, traffic_representation, max_steps, use_default, skip_scenarios):
@@ -242,6 +384,12 @@ class MultiprocessingMarlEnvironment(Environment):
                 worker_end.send(env.reset(**kwargs))
             elif cmd == "step":
                 worker_end.send(env.step(**kwargs))
+            elif cmd == "state":
+                worker_end.send(env.state())
+            elif cmd == "metadata":
+                worker_end.send(env.metadata())
+            elif cmd == "info":
+                worker_end.send(env.info())
             else:
                 env.close()
                 del env

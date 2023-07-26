@@ -9,7 +9,7 @@ import sumolib
 from tqdm import tqdm
 
 from src.sumo.utils import netgenerate, randomTrips
-from src.params import TRAIN_SCENARIOS_ROOT, DEMO_SCENARIOS_ROOT, N_WORKERS, N_TRAIN_EPISODES
+from src.params import TRAIN_SCENARIOS_ROOT, DEMO_SCENARIOS_ROOT
 
 
 RAND_ITERATIONS = 15
@@ -31,7 +31,7 @@ VEHICLE_DEPARTURE_ALPHA_MAX = 5.0
 VEHICLE_DEPARTURE_BETA_MIN = 1.0
 VEHICLE_DEPARTURE_BETA_MAX = 5.0
 
-N_TRAIN_SCENARIOS = N_WORKERS * N_TRAIN_EPISODES
+N_TRAIN_SCENARIOS = 1_000
 N_DEMO_SCENARIOS = 1
 
 
@@ -267,8 +267,8 @@ def random_all_scenarios():
 
 
 if __name__ == "__main__":
-    #fixed_all_scenarios()
-    #random_topology_scenarios()
-    #random_rate_scenarios()
-    #random_location_scenarios()
+    fixed_all_scenarios()
+    random_topology_scenarios()
+    random_rate_scenarios()
+    random_location_scenarios()
     random_all_scenarios()

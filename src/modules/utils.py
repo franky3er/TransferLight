@@ -29,6 +29,27 @@ def group_argmax(x: torch.Tensor, group_index: torch.Tensor, return_indices: boo
     return argmax_values.squeeze()
 
 
+def group_categorical_sample(probs: torch.Tensor, group_index: torch.Tensor, return_indices: bool = False):
+    probs = probs.squeeze()
+    assert probs.size(0) == group_index.size(0)
+    device = probs.get_device()
+    dtype = probs.dtype
+    n_items = probs.size(0)
+    n_groups = torch.max(group_index) + 1
+    probs_repeated = probs.unsqueeze(1).repeat(1, n_groups)
+    item_index = torch.arange(0, n_items, device=device)
+    group_index = torch.nn.functional.one_hot(group_index)
+    cumsum_group_index = torch.cumsum(group_index, dim=0) - 1
+    dummy_probs = torch.zeros(n_items, n_groups, dtype=dtype, device=device)
+    dummy_probs = (1 - group_index) * dummy_probs + group_index * probs_repeated
+    dummy_probs = dummy_probs.T
+    categorial = torch.distributions.Categorical(probs=dummy_probs)
+    sample_index = categorial.sample().unsqueeze(0)
+    sample_values = torch.gather(cumsum_group_index, 0, sample_index).squeeze()
+    sample_indices = item_index[sample_index.squeeze()]
+    return sample_values if not return_indices else sample_values, sample_indices
+
+
 def group_sum(x: torch.Tensor, group_index: torch.LongTensor):
     assert x.size(0) == group_index.size(0)
     if x.dim() == 1:
@@ -43,6 +64,14 @@ def group_max(x: torch.Tensor, group_index: torch.LongTensor):
         x = x.unsqueeze(1)
     max_aggr = aggr.MaxAggregation()
     return max_aggr(x, group_index).squeeze()
+
+
+def group_mean(x: torch.Tensor, group_index: torch.LongTensor):
+    assert x.size(0) == group_index.size(0)
+    if x.dim() == 1:
+        x = x.unsqueeze(1)
+    mean_aggr = aggr.MeanAggregation()
+    return mean_aggr(x, group_index).squeeze()
 
 
 def concat_features(features: List[torch.Tensor], dim: int = -1) -> torch.Tensor:
