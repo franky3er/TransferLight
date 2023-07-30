@@ -13,6 +13,7 @@ from torch import multiprocessing as mp
 from torch_geometric.data import Batch, Data, HeteroData
 from torch_geometric.data.data import BaseData
 
+from src.callbacks.environment_callbacks import VehicleStats
 from src.params import ENV_ACTION_EXECUTION_TIME, ENV_YELLOW_TIME, ENV_RED_TIME
 from src.rl.problem_formulations import ProblemFormulation
 
@@ -74,6 +75,7 @@ class MarlEnvironment(Environment):
         self.trip_statistics = None
         self.intersection_statistics = None
         self.rewards = None
+        self.callbacks = [VehicleStats("results")]
 
     def reset(self) -> BaseData:
         self.close()
@@ -154,54 +156,13 @@ class MarlEnvironment(Environment):
         self.episode_action_step += 1
         self.action_step += 1
 
-    def _update_statistics(self):
-        self._update_trip_statistics()
-        self._update_intersection_statistics()
-
-    def _update_trip_statistics(self):
-        trip_statistics = []
-        for vehicle in traci.vehicle.getIDList():
-            trip_statistics.append({
-                "net_xml_path": self.net_xml_path,
-                "episode": self.episode,
-                "time_step": self.time_step,
-                "action_step": self.action_step,
-                "episode_time_step": self.episode_time_step,
-                "episode_action_step": self.episode_action_step,
-                "vehicle": vehicle,
-                "distance": traci.vehicle.getDistance(vehicle),
-                "lane": traci.vehicle.getLaneID(vehicle),
-                "speed": traci.vehicle.getSpeed(vehicle),
-                "waiting_time": traci.vehicle.getWaitingTime(vehicle)
-            })
-        trip_statistics = pd.DataFrame(data=trip_statistics)
-        self.trip_statistics = trip_statistics if self.trip_statistics is None \
-            else pd.concat([self.trip_statistics, trip_statistics])
-
-    def _update_intersection_statistics(self):
-        intersection_statistics = []
-        for intersection in traci.trafficlight.getIDList():
-            intersection_statistics.append({
-                "net_xml_path": self.net_xml_path,
-                "episode": self.episode,
-                "time_step": self.time_step,
-                "action_step": self.action_step,
-                "episode_time_step": self.episode_time_step,
-                "episode_action_step": self.episode_action_step,
-                "intersection": intersection,
-                "pressure": self.problem_formulation.get_intersection_normalized_pressure(intersection),
-                "queue_length": self.problem_formulation.get_intersection_queue_length(intersection)
-            })
-        intersection_statistics = pd.DataFrame(data=intersection_statistics)
-        self.intersection_statistics = intersection_statistics if self.intersection_statistics is None \
-            else pd.concat([self.intersection_statistics, intersection_statistics])
-
     def _apply_default_actions(self):
         for _ in range(ENV_ACTION_EXECUTION_TIME):
+            [callback.on_step_start(self) for callback in self.callbacks]
             traci.simulationStep()
             self.episode_time_step += 1
             self.time_step += 1
-            self._update_statistics()
+            [callback.on_step_end(self) for callback in self.callbacks]
 
     def _apply_controlled_actions(self, actions: List[int]):
         actions = [actions] if isinstance(actions, int) else actions
@@ -213,12 +174,13 @@ class MarlEnvironment(Environment):
         green_signals = [self._get_signal(intersection, action)
                          for intersection, action in zip(signalized_intersections, actions)]
         for t in range(ENV_ACTION_EXECUTION_TIME):
+            [callback.on_step_start(self) for callback in self.callbacks]
             for signalized_intersection, transition_signals_ in zip(signalized_intersections, transition_signals):
                 traci.trafficlight.setRedYellowGreenState(signalized_intersection, transition_signals_[t])
             traci.simulationStep()
             self.episode_time_step += 1
             self.time_step += 1
-            self._update_statistics()
+            [callback.on_step_end(self) for callback in self.callbacks]
         for signalized_intersection, green_signal in zip(signalized_intersections, green_signals):
             traci.trafficlight.setRedYellowGreenState(signalized_intersection, green_signal)
 
@@ -333,7 +295,6 @@ class MultiprocessingMarlEnvironment(Environment):
             md = parent_end.recv()
             metadata["n_agents"].append(md["n_agents"])
             metadata["n_actions"].append(md["n_actions"])
-        #metadata["episode"] = np.array(metadata["episode"]).min()
         metadata["agent_offsets"] = np.cumsum(metadata["n_agents"]).tolist()
         metadata["action_offsets"] = np.cumsum(metadata["n_actions"]).tolist()
         metadata["n_workers"] = self.n_workers

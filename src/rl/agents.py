@@ -374,7 +374,7 @@ class A2C(IndependentAgents):
         state = environment.reset()
         while True:
             state = state.to(device)
-            actions = self.act(state, greedy=True, mc_samples=10)[0]
+            actions = self.act(state, greedy=False, mc_samples=10)[0]
             state, _, done = environment.step(actions)
             if done:
                 break
