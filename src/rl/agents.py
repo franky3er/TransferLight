@@ -154,11 +154,12 @@ class DQN(IndependentAgents):
         return actions.cpu().tolist(), actions_index.cpu(), actions_bool_index.cpu(), action_values_mean.cpu(), \
             action_values_std.cpu(), agent_index.cpu()
 
-    def fit(self, environment: MultiprocessingMarlEnvironment, steps: int = 1_000, checkpoint_path: str = None):
+    def fit(self, environment: MultiprocessingMarlEnvironment, steps: int = 1_000, skip_steps: int = 100,
+            checkpoint_path: str = None):
         self.train()
         highest_ema_reward = - sys.float_info.max
         _ = environment.reset()
-        while environment.action_step <= steps:
+        while environment.total_step <= steps + skip_steps:
             metadata = environment.metadata()
             self.n_workers = metadata["n_workers"]
             self.worker_agent_offsets = metadata["agent_offsets"]
@@ -167,7 +168,7 @@ class DQN(IndependentAgents):
             actions, _, actions_bool_index, _, _, _ = self.act(states.to(device), eps=self.eps)
 
             next_states, rewards, done = environment.step(actions)
-            if environment.episode == 0:
+            if environment.total_step < skip_steps:
                 continue
 
             self._update_replay_buffer(states, actions_bool_index, rewards, next_states)
@@ -222,7 +223,7 @@ class DQN(IndependentAgents):
     def _optimization_step(self, loss: torch.Tensor):
         self.optimizer.zero_grad()
         loss.backward()
-        self.optimizer.step()
+        self.optimizer.episode_step()
 
     def _update_target_q_network(self):
         # Polyak averaging to update the parameters of the target network
@@ -305,16 +306,17 @@ class A2C(IndependentAgents):
         actions = actions.cpu().numpy().tolist()
         return actions, actions_index, probs_mean, probs_std, agent_index
 
-    def fit(self, environment: MultiprocessingMarlEnvironment, steps: int = 1_000, checkpoint_path: str = None):
+    def fit(self, environment: MultiprocessingMarlEnvironment, steps: int = 1_000, skip_steps: int = 100,
+            checkpoint_path: str = None):
         self.train()
         _ = environment.reset()
         highest_ema_reward = - sys.float_info.max
-        while environment.action_step <= steps:
+        while environment.total_step <= steps + skip_steps:
             states = environment.state()
             states = states.to(device)
             actions, log_prob_actions, values, entropies = self.full_path(states)
             next_states, rewards, done = environment.step(actions)
-            if environment.episode == 0:
+            if environment.total_step < skip_steps:
                 continue
             next_states, rewards = next_states.to(device), rewards.to(device)
             next_values = self.critic_path(next_states)
@@ -342,7 +344,7 @@ class A2C(IndependentAgents):
         self.optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.parameters(), self.gradient_clipping_max_norm)
-        self.optimizer.step()
+        self.optimizer.episode_step()
 
     def _shared_optimization_step(self, actor_loss: torch.Tensor, critic_loss: torch.Tensor):
         loss = self.actor_loss_weight * actor_loss + self.critic_loss_weight * critic_loss
@@ -350,7 +352,7 @@ class A2C(IndependentAgents):
         self.optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.parameters(), self.gradient_clipping_max_norm)
-        self.optimizer.step()
+        self.optimizer.episode_step()
 
     def _unshared_optimization_step(self, actor_loss: torch.Tensor, critic_loss: torch.Tensor):
         actor_loss = self.actor_loss_weight * actor_loss
@@ -364,8 +366,8 @@ class A2C(IndependentAgents):
                                        self.gradient_clipping_max_norm)
         torch.nn.utils.clip_grad_norm_(list(self.network_c.parameters()) + list(self.critic_head.parameters()),
                                        self.gradient_clipping_max_norm)
-        self.optimizer_c.step()
-        self.optimizer_a.step()
+        self.optimizer_c.episode_step()
+        self.optimizer_a.episode_step()
 
     @torch.no_grad()
     def demo(self, environment: MarlEnvironment, checkpoint_path: str = None):

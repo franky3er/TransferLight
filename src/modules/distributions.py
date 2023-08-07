@@ -10,7 +10,7 @@ class GroupCategorical(nn.Module):
     def __init__(self, logits: torch.Tensor = None, probs: torch.Tensor = None, index: torch.Tensor = None):
         super(GroupCategorical, self).__init__()
         assert (logits is not None) != (probs is not None)
-        self.logits, self.logits = None, None
+        self.logits, self.probs = None, None
         if logits is not None:
             if logits.dim() == 2 and index is None:
                 logits, index = self._flatten(logits)

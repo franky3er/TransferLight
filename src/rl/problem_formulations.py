@@ -164,6 +164,12 @@ class ProblemFormulation(ABC):
                                   if edge.getToNode().getID() == signalized_intersection_id]))
         return queue_length
 
+    def get_intersection_waiting_time(self, signalized_intersection_id: str):
+        waiting_time = sum([traci.edge.getWaitingTime(edge.getID())
+                            for edge in self.net.getEdges()
+                            if edge.getToNode().getID() == signalized_intersection_id])
+        return waiting_time
+
     def get_intersection_pressure(self, signalized_intersection_id: str):
         pressure = 0
         for movement in [m for m in self.movements.keys() if m[1] == signalized_intersection_id]:
@@ -248,26 +254,6 @@ class MaxPressureProblemFormulation(ProblemFormulation):
         return - torch.tensor(self.get_intersection_level_metrics("normalized_pressure"))
 
 
-class LitProblemFormulation(ProblemFormulation):
-
-    def get_state(self) -> Data:
-        x = []
-        for intersection_id in self.signalized_intersections:
-            x_intersection= [0.0 for _ in range(len(self.get_phases(intersection_id)))]
-            x_intersection[self.get_current_phase(intersection_id)] = 1.0
-            in_approaches = sort_approaches_clockwise([edge for edge in self.net.getEdges()
-                                                       if edge.getToNode().getID() == intersection_id])
-            lanes = [lane for road in in_approaches for lane in road.getLanes()]
-            for lane in lanes:
-                x_intersection.append(float(traci.lane.getLastStepVehicleNumber(lane.getID())))
-            x.append(x_intersection)
-        x = torch.tensor(x)
-        return Data(x=x)
-
-    def get_rewards(self) -> torch.Tensor:
-        return - torch.tensor(self.get_intersection_level_metrics("queue_length"))
-
-
 class PressLightProblemFormulation(ProblemFormulation):
 
     def __init__(self, *args, n_segments: int = 3):
@@ -310,74 +296,6 @@ class PressLightProblemFormulation(ProblemFormulation):
 
     def get_rewards(self) -> torch.Tensor:
         return - torch.tensor(self.get_intersection_level_metrics("pressure"))
-
-
-class GraphPressLightProblemFormulation(ProblemFormulation):
-
-    def __init__(self, *args, segment_length: float = 20.0):
-        super(GraphPressLightProblemFormulation, self).__init__(*args)
-        self.segment_length = segment_length
-        self.segments = []
-        self.edge_index_segment_to_lane = []
-        self.segment_bins = {}
-        for lane_id in self.lanes:
-            lane = self.net.getLane(lane_id)
-            lane_length = lane.getLength()
-            n_segments = int(lane_length // segment_length)
-            bins = [(i+1) * segment_length for i in range(n_segments)]
-            self.segment_bins[lane_id] = bins
-            self.segments += [(lane_id, i) for i in range(n_segments)]
-            self.edge_index_segment_to_lane += [(self.segments.index((lane_id, segment)), self.lanes.index(lane_id))
-                                                for segment in range(n_segments)]
-
-        self.edge_index_lane_to_segment = self.reverse_edge_index(self.edge_index_segment_to_lane)
-        self.edge_attr_movement_to_phase = []
-        for movement, phase in [(list(self.movements.keys())[m], self.phases[p])
-                                for m, p in self.edge_index_movement_to_phase]:
-            params = self.phase_movement_params[(phase, movement)]
-            edge_attr = [float(params["prohibited"]), float(params["permitted"]), float(params["protected"])]
-            self.edge_attr_movement_to_phase.append(edge_attr)
-        self.edge_attr_movement_to_phase = torch.tensor(self.edge_attr_movement_to_phase)
-
-        self.edge_attr_phase_to_phase = []
-        for phase_j, phase_i in [(self.phases[j], self.phases[i]) for j, i in self.edge_index_phase_to_phase]:
-            phase_j_movements = self.phase_movements[phase_j]
-            phase_i_movements = self.phase_movements[phase_i]
-            intersection_movements = set(phase_j_movements).intersection(set(phase_i_movements))
-            union_movements = set(phase_j_movements).union(set(phase_i_movements))
-            overlap = (len(intersection_movements) / len(union_movements)) > 0.0
-            self.edge_attr_phase_to_phase.append([float(overlap)])
-        self.edge_attr_phase_to_phase = torch.tensor(self.edge_attr_phase_to_phase)
-
-    def get_state(self) -> HeteroData:
-        data = HeteroData()
-
-        # Node Features
-        data["segment"].x = self._get_segment_features()
-        data["movement"].x = self._get_movement_features()
-        data["lane"].x = self._get_lane_features()
-        data["phase"].x = self._get_phase_features()
-        data["intersection"].x = self._get_signalized_intersection_features()
-
-        # Edge Indices
-        data["segment", "to", "lane"].edge_index = self.edge_index_to_tensor(
-            self.edge_index_segment_to_lane)
-        data["lane", "to", "segment"].edge_index = self.edge_index_to_tensor(
-            self.edge_index_lane_to_segment)
-        data["lane", "to_downstream", "movement"].edge_index = self.edge_index_to_tensor(
-            self.edge_index_lane_to_downstream_movement)
-        data["lane", "to_upstream", "movement"].edge_index = self.edge_index_to_tensor(
-            self.edge_index_lane_to_upstream_movement)
-        data["movement", "to_upstream", "lane"].edge_index = self.edge_index_to_tensor(
-            self.edge_index_movement_to_upstream_lane)
-        data["movement", "to_downstream", "lane"].edge_index = self.edge_index_to_tensor(
-            self.edge_index_movement_to_downstream_lane)
-        data["movement", "to", "phase"].edge_index = self.edge_index_to_tensor(self.edge_index_movement_to_phase)
-        data["phase", "to", "movement"].edge_index = self.edge_index_to_tensor(self.edge_index_phase_to_movement)
-        data["phase", "to", "phase"].edge_index = self.edge_index_to_tensor(self.edge_index_phase_to_phase)
-        data["movement", "to", "intersection"].edge_index = self.edge_index_to_tensor(
-            self.edge_index_movement_to_intersection)
-
 
 
 class GeneraLightProblemFormulation(ProblemFormulation):

@@ -12,7 +12,8 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 if __name__ == "__main__":
     #scenarios_dir = os.path.join(SCENARIOS_ROOT, "grid", "1x1-500m", "train")
     #scenarios_dir = os.path.join(SCENARIOS_ROOT, "grid", "3x3-150m", "train")
-    scenarios_dir = os.path.join(SCENARIOS_ROOT, "demo", "random-topology")
+    scenario_path = os.path.join(SCENARIOS_ROOT, "demo", "random-network", "1.sumocfg")
+    #scenario_path = os.path.join(SCENARIOS_ROOT, "test", "ingolstadt21", "ingolstadt21.sumocfg")
 
     max_waiting_time = 900
     episodes = 20
@@ -20,8 +21,8 @@ if __name__ == "__main__":
     hidden_dim = 64
     attention_heads = 8
 
-    max_pressure_environment = MarlEnvironment(scenarios_dir, max_waiting_time, "MaxPressureProblemFormulation", use_default=False, demo=True)
-    generalight_environment = MarlEnvironment(scenarios_dir, max_waiting_time, "GeneraLightProblemFormulation", use_default=False, demo=True)
+    max_pressure_environment = MarlEnvironment(scenario_path=scenario_path, max_patience=max_waiting_time, problem_formulation="MaxPressureProblemFormulation", use_default=False, demo=True)
+    generalight_environment = MarlEnvironment(scenario_path=scenario_path, max_patience=max_waiting_time, problem_formulation="GeneraLightProblemFormulation", use_default=False, demo=True)
 
     q_network = {
         "class_name": "GeneraLightNetwork",
