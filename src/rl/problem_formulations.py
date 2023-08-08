@@ -12,6 +12,7 @@ import libsumo as traci
 from torch_geometric.data import Data, HeteroData
 
 from src.rl.utils import sort_approaches_clockwise, angle_approach, angle_between_approaches
+from src.sumo.net import NetState
 
 
 class ProblemFormulation(ABC):
@@ -20,7 +21,7 @@ class ProblemFormulation(ABC):
     def create(cls, class_name: str, net: Net):
         return getattr(sys.modules[__name__], class_name)(net)
 
-    def __init__(self, net: Net):
+    def __init__(self, net: NetState):
         # Node Types
         self.net = net
         self.intersections = [intersection_id.getID() for intersection_id in net.getNodes()]
@@ -138,27 +139,6 @@ class ProblemFormulation(ABC):
     def get_state(self) -> Any:
         pass
 
-    def get_signalized_intersections(self) -> List[str]:
-        return self.signalized_intersections
-
-    @staticmethod
-    def get_current_phase(signalized_intersection_id: str):
-        signal = traci.trafficlight.getRedYellowGreenState(signalized_intersection_id)
-        phase_signals = \
-            [phase.state for phase
-             in traci.trafficlight.getCompleteRedYellowGreenDefinition(signalized_intersection_id)[1].phases]
-        return phase_signals.index(signal)
-
-    def get_current_phases(self) -> List[int]:
-        phases = []
-        for junction_id in self.signalized_intersections:
-            phases.append(self.get_current_phase(junction_id))
-        return phases
-
-    @staticmethod
-    def get_phases(signalized_intersection_id: str):
-        return range(len(traci.trafficlight.getCompleteRedYellowGreenDefinition(signalized_intersection_id)[1].phases))
-
     def get_intersection_queue_length(self, signalized_intersection_id: str):
         queue_length = float(sum([traci.edge.getLastStepHaltingNumber(edge.getID()) for edge in self.net.getEdges()
                                   if edge.getToNode().getID() == signalized_intersection_id]))
@@ -217,12 +197,6 @@ class ProblemFormulation(ABC):
     @abstractmethod
     def get_rewards(self) -> torch.Tensor:
         pass
-
-    @staticmethod
-    def get_max_vehicle_waiting_time() -> float:
-        if len(traci.vehicle.getIDList()) == 0:
-            return 0.0
-        return np.max([traci.vehicle.getWaitingTime(vehID=veh_id) for veh_id in traci.vehicle.getIDList()])
 
     @classmethod
     def get_metadata(cls):
@@ -296,6 +270,13 @@ class PressLightProblemFormulation(ProblemFormulation):
 
     def get_rewards(self) -> torch.Tensor:
         return - torch.tensor(self.get_intersection_level_metrics("pressure"))
+
+
+class GeneraLightProblemFormulationV2(ProblemFormulation):
+
+    def __init__(self, *args, segment_length: float = 10.0):
+        super(GeneraLightProblemFormulationV2, self).__init__(*args)
+        self.segment_length = segment_length
 
 
 class GeneraLightProblemFormulation(ProblemFormulation):
@@ -444,7 +425,7 @@ class GeneraLightProblemFormulation(ProblemFormulation):
             movement_permitted = False
             movement_protected = False
             if intersection_id in self.signalized_intersections:
-                phase = (intersection_id, self.get_current_phase(intersection_id))
+                phase = (intersection_id, self.net.get_current_phase_idx(intersection_id))
                 if movement in self.phase_movements[phase]:
                     movement_params = self.phase_movement_params[(phase, movement)]
                     movement_prohibited = False
@@ -468,7 +449,7 @@ class GeneraLightProblemFormulation(ProblemFormulation):
         x = []
         for phase in self.phases:
             intersection_id, phase_idx = phase
-            phase_active = True if self.get_current_phase(intersection_id) == phase_idx else False
+            phase_active = True if self.net.get_current_phase_idx(intersection_id) == phase_idx else False
             x_phase = [float(phase_active)]
             x.append(x_phase)
         x = torch.tensor(x, dtype=torch.float32)

@@ -16,7 +16,7 @@ from src.modules.network_bodies import NetworkBody
 from src.modules.network_heads import NetworkHead
 from src.modules.base_modules import MultiInputSequential
 from src.modules.utils import group_argmax, group_sum
-from src.params import ENV_ACTION_EXECUTION_TIME
+from src.params import ACTION_TIME
 from src.rl.environments import MarlEnvironment, MultiprocessingMarlEnvironment
 from src.rl.exploration import ExpDecayEpsGreedyStrategy
 
@@ -49,9 +49,9 @@ class IndependentAgents(nn.Module):
 
 class MaxPressure(IndependentAgents):
 
-    def __init__(self, min_phase_duration: int):
+    def __init__(self, min_phase_duration: int, action_time: int = ACTION_TIME):
         super(MaxPressure, self).__init__()
-        self.min_phase_steps = min_phase_duration // ENV_ACTION_EXECUTION_TIME
+        self.min_phase_steps = min_phase_duration // action_time
         self.initialized = False
         self.actions = None
         self.action_durations = None

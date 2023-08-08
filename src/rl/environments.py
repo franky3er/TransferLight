@@ -8,14 +8,13 @@ import xml.etree.ElementTree as ET
 
 import libsumo as traci
 import numpy as np
-import sumolib.net
 import torch
 from torch import multiprocessing as mp
 from torch_geometric.data import Batch, Data, HeteroData
 from torch_geometric.data.data import BaseData
 
 from src.callbacks.environment_callbacks import VehicleStats, IntersectionStats
-from src.params import ENV_ACTION_EXECUTION_TIME, ENV_YELLOW_TIME, ENV_RED_TIME
+from src.params import ACTION_TIME, YELLOW_CHANGE_TIME, ALL_RED_TIME
 from src.rl.problem_formulations import ProblemFormulation
 from src.sumo.net import readNetState
 
@@ -47,7 +46,8 @@ class MarlEnvironment(Environment):
 
     def __init__(self, name: str = None, scenario_path: str = None, scenarios_dir: str = None,
                  max_patience: int = sys.maxsize, problem_formulation: str = None, use_default: bool = False,
-                 demo: bool = False):
+                 action_time: int = ACTION_TIME, yellow_change_time: int = YELLOW_CHANGE_TIME,
+                 all_red_time: int = ALL_RED_TIME, demo: bool = False):
         self.name = "1" if name is None else name
         self.scenarios, self.scenarios_dir, self.scenario = None, None, None
         self.setup_scenarios(scenario_path, scenarios_dir)
@@ -61,6 +61,7 @@ class MarlEnvironment(Environment):
         self.episode = -1
         self.total_step, self.total_time, self.episode_step, self.episode_time = 0, 0, 0, 0
         self.rewards = None
+        self.action_time, self.yellow_change_time, self.all_red_time = action_time, yellow_change_time, all_red_time
         self.callbacks = [VehicleStats("results/vehicle"), IntersectionStats("results/intersection")]
 
     def setup_scenarios(self, scenario_path: str = None, scenarios_dir: str = None):
@@ -85,12 +86,11 @@ class MarlEnvironment(Environment):
         self.scenario = next(self.scenarios)
         net_xml_path = os.path.join(self.scenarios_dir,
                                     ET.parse(self.scenario).getroot().find("input").find("net-file").attrib["value"])
-        self.net = readNetState(net_xml_path)
         sumo_cmd = [self.sumo, "-c", self.scenario, "--time-to-teleport", str(-1), "--no-warnings"]
         traci.start(sumo_cmd)
         if not self.use_default:
-            for tls in self.net.getTrafficLights():
-                logic = traci.trafficlight.getCompleteRedYellowGreenDefinition(tls.getID())[0]
+            for intersection in traci.trafficlight.getIDList():
+                logic = traci.trafficlight.getCompleteRedYellowGreenDefinition(intersection)[0]
                 new_phases = []
                 for phase in logic.phases:
                     if "y" in phase.state or len([c for c in [*phase.state] if c != "r"]) == 0:
@@ -98,7 +98,8 @@ class MarlEnvironment(Environment):
                     new_phases.append(traci.trafficlight.Phase(9999999, phase.state))
                 random_phase_idx = random.randrange(len(new_phases))
                 new_logic = traci.trafficlight.Logic(f"{logic.programID}-new", logic.type, random_phase_idx, new_phases)
-                traci.trafficlight.setCompleteRedYellowGreenDefinition(tls.getID(), new_logic)
+                traci.trafficlight.setCompleteRedYellowGreenDefinition(intersection, new_logic)
+        self.net = readNetState(net_xml_path)
         self.problem_formulation = ProblemFormulation.create(self.problem_formulation_name, self.net)
         state = self.problem_formulation.get_state()
         [callback.on_episode_start(self) for callback in self.callbacks]
@@ -118,7 +119,8 @@ class MarlEnvironment(Environment):
         state = self.problem_formulation.get_state()
         rewards = self.problem_formulation.get_rewards()
         self.rewards = rewards
-        max_waiting_time = self.problem_formulation.get_max_vehicle_waiting_time()
+        max_waiting_time = 0.0 if len(traci.vehicle.getIDList()) == 0 \
+            else np.max([traci.vehicle.getWaitingTime(vehID=veh_id) for veh_id in traci.vehicle.getIDList()])
         if max_waiting_time > self.max_patience:
             print(f"max_waiting_time > max_patience   ({self.scenario})")
         done = (True if traci.simulation.getMinExpectedNumber() == 0 or max_waiting_time > self.max_patience
@@ -132,11 +134,10 @@ class MarlEnvironment(Environment):
         return self.problem_formulation.get_state()
 
     def metadata(self) -> Dict:
-        signalized_intersections = self.problem_formulation.get_signalized_intersections()
         metadata = {
-            "n_agents": len(signalized_intersections),
-            "n_actions": sum([len(self.problem_formulation.get_phases(intersection_id))
-                              for intersection_id in signalized_intersections])
+            "n_agents": len(self.net.signalized_intersections),
+            "n_actions": sum([len(self.net.get_phases(intersection))
+                              for intersection in self.net.signalized_intersections])
         }
         return metadata
 
@@ -158,7 +159,7 @@ class MarlEnvironment(Environment):
         self.total_step += 1
 
     def _apply_default_actions(self):
-        for _ in range(ENV_ACTION_EXECUTION_TIME):
+        for _ in range(self.action_time):
             [callback.on_step_start(self) for callback in self.callbacks]
             traci.simulationStep()
             self.episode_time += 1
@@ -167,54 +168,50 @@ class MarlEnvironment(Environment):
 
     def _apply_controlled_actions(self, actions: List[int]):
         actions = [actions] if isinstance(actions, int) else actions
-        previous_actions = self.problem_formulation.get_current_phases()
-        signalized_intersections = self.problem_formulation.get_signalized_intersections()
-        transition_signals = [self._get_transition_signals(intersection, prev_action, action)
-                              for intersection, prev_action, action
-                              in zip(signalized_intersections, previous_actions, actions)]
-        green_signals = [self._get_signal(intersection, action)
-                         for intersection, action in zip(signalized_intersections, actions)]
-        for t in range(ENV_ACTION_EXECUTION_TIME):
+        signalized_intersections = self.net.signalized_intersections
+        current_phases = [self.net.get_current_phase(intersection) for intersection in signalized_intersections]
+        next_phases = [self.net.get_phases(intersection)[action]
+                       for intersection, action in zip(signalized_intersections, actions)]
+        transition_states = [self._get_transition_states(current_phase[1], next_phase[1])
+                             for current_phase, next_phase in zip(current_phases, next_phases)]
+        green_states = [next_phase[1] for next_phase in next_phases]
+        for t in range(self.action_time):
             [callback.on_step_start(self) for callback in self.callbacks]
-            for signalized_intersection, transition_signals_ in zip(signalized_intersections, transition_signals):
-                traci.trafficlight.setRedYellowGreenState(signalized_intersection, transition_signals_[t])
+            for signalized_intersection, transition_state_ in zip(signalized_intersections, transition_states):
+                traci.trafficlight.setRedYellowGreenState(signalized_intersection, transition_state_[t])
             traci.simulationStep()
             self.episode_time += 1
             self.total_time += 1
             [callback.on_step_end(self) for callback in self.callbacks]
-        for signalized_intersection, green_signal in zip(signalized_intersections, green_signals):
-            traci.trafficlight.setRedYellowGreenState(signalized_intersection, green_signal)
+        for signalized_intersection, green_state in zip(signalized_intersections, green_states):
+            traci.trafficlight.setRedYellowGreenState(signalized_intersection, green_state)
 
-    def _get_transition_signals(self, intersection: str, current_phase: int, next_phase: int) -> List[str]:
-        current_green_signal = self._get_signal(intersection, current_phase)
-        next_green_signal = self._get_signal(intersection, next_phase)
-        next_yellow_signal, next_red_signal = [], []
-        for current_s, next_s in zip([*current_green_signal], [*next_green_signal]):
-            if (current_s == "g" or current_s == "G") and next_s == "r":
-                next_yellow_signal.append("y")
-                next_red_signal.append("r")
+    def _get_transition_states(self, current_state: str, next_state: str) -> List[str]:
+        next_yellow_state, next_red_state, next_green_state = [], [], next_state
+        for current_signal, next_signal in zip([*current_state], [*next_state]):
+            if (current_signal == "g" or current_signal == "G") and next_signal == "r":
+                next_yellow_state.append("y")
+                next_red_state.append("r")
             else:
-                next_yellow_signal.append(current_s)
-                next_red_signal.append(current_s)
-        next_yellow_signal, next_red_signal = "".join(next_yellow_signal), "".join(next_red_signal)
+                next_yellow_state.append(current_signal)
+                next_red_state.append(current_signal)
+        next_yellow_state, next_red_state = "".join(next_yellow_state), "".join(next_red_state)
         transition_signals = []
-        for _ in range(ENV_YELLOW_TIME):
-            transition_signals.append(next_yellow_signal)
-        for _ in range(ENV_RED_TIME):
-            transition_signals.append(next_red_signal)
-        for _ in range(ENV_ACTION_EXECUTION_TIME - ENV_YELLOW_TIME - ENV_RED_TIME):
-            transition_signals.append(next_green_signal)
+        for _ in range(self.yellow_change_time):
+            transition_signals.append(next_yellow_state)
+        for _ in range(self.all_red_time):
+            transition_signals.append(next_red_state)
+        for _ in range(self.action_time - self.yellow_change_time - self.all_red_time):
+            transition_signals.append(next_green_state)
         return transition_signals
-
-    @staticmethod
-    def _get_signal(junction_id: str, phase: int):
-        return traci.trafficlight.getCompleteRedYellowGreenDefinition(junction_id)[1].phases[phase].state
 
 
 class MultiprocessingMarlEnvironment(Environment):
 
     def __init__(self, scenario_path: str = None, scenarios_dir: str = None, max_patience: int = sys.maxsize,
-                 problem_formulation: str = None, n_workers: int = 1, use_default: bool = False):
+                 problem_formulation: str = None, n_workers: int = 1, use_default: bool = False,
+                 action_time: int = ACTION_TIME, yellow_change_time: int = YELLOW_CHANGE_TIME,
+                 all_red_time: int = ALL_RED_TIME):
         self.scenarios, self.scenarios_dir, self.scenario = None, None, None
         self.setup_scenarios(scenario_path, scenarios_dir)
         self.problem_formulation_name = problem_formulation
@@ -223,6 +220,7 @@ class MultiprocessingMarlEnvironment(Environment):
         self.use_default = use_default
         self.demo = False
         self.pipes = [mp.Pipe() for _ in range(self.n_workers)]
+        self.action_time, self.yellow_change_time, self.all_red_time = action_time, yellow_change_time, all_red_time
         self.workers = [mp.Process(target=self.work, args=self._get_work_args(rank))
                         for rank in range(self.n_workers)]
         [worker.start() for worker in self.workers]
@@ -252,10 +250,11 @@ class MultiprocessingMarlEnvironment(Environment):
 
     def _get_work_args(self, rank: int):
         return rank, self.pipes[rank][1], self.scenarios, self.problem_formulation_name, self.max_patience, \
-            self.use_default
+            self.use_default, self.action_time, self.yellow_change_time, self.all_red_time
 
     @staticmethod
-    def work(rank, worker_end, scenarios, problem_formulation, max_patience, use_default):
+    def work(rank, worker_end, scenarios, problem_formulation, max_patience, use_default, action_time,
+             yellow_change_time, all_red_time):
         print(f"Worker {rank} started")
         env = None
         while True:
@@ -265,7 +264,9 @@ class MultiprocessingMarlEnvironment(Environment):
                 scenarios.put(scenario)
                 if env is None:
                     env = MarlEnvironment(name=rank, scenario_path=scenario, max_patience=max_patience,
-                                          problem_formulation=problem_formulation, use_default=use_default)
+                                          problem_formulation=problem_formulation, use_default=use_default,
+                                          action_time=action_time, yellow_change_time=yellow_change_time,
+                                          all_red_time=all_red_time)
                 else:
                     env.setup_scenarios(scenario_path=scenario)
                 worker_end.send(env.reset(**kwargs))
