@@ -33,6 +33,7 @@ def group_categorical_sample(probs: torch.Tensor, group_index: torch.Tensor, ret
     probs = probs.squeeze()
     assert probs.size(0) == group_index.size(0)
     device = probs.get_device()
+    device = "cpu" if device < 0 else device
     dtype = probs.dtype
     n_items = probs.size(0)
     n_groups = torch.max(group_index) + 1

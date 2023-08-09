@@ -16,7 +16,7 @@ from torch_geometric.data.data import BaseData
 from src.callbacks.environment_callbacks import VehicleStats, IntersectionStats
 from src.params import ACTION_TIME, YELLOW_CHANGE_TIME, ALL_RED_TIME
 from src.rl.problem_formulations import ProblemFormulation
-from src.sumo.net import readNetState
+from src.sumo.net import read_traffic_net
 
 
 class Environment(ABC):
@@ -99,7 +99,7 @@ class MarlEnvironment(Environment):
                 random_phase_idx = random.randrange(len(new_phases))
                 new_logic = traci.trafficlight.Logic(f"{logic.programID}-new", logic.type, random_phase_idx, new_phases)
                 traci.trafficlight.setCompleteRedYellowGreenDefinition(intersection, new_logic)
-        self.net = readNetState(net_xml_path)
+        self.net = read_traffic_net(net_xml_path)
         self.problem_formulation = ProblemFormulation.create(self.problem_formulation_name, self.net)
         state = self.problem_formulation.get_state()
         [callback.on_episode_start(self) for callback in self.callbacks]
