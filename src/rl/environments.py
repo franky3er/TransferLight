@@ -86,6 +86,7 @@ class MarlEnvironment(Environment):
         self.scenario = next(self.scenarios)
         net_xml_path = os.path.join(self.scenarios_dir,
                                     ET.parse(self.scenario).getroot().find("input").find("net-file").attrib["value"])
+        print(net_xml_path)
         sumo_cmd = [self.sumo, "-c", self.scenario, "--time-to-teleport", str(-1), "--no-warnings"]
         traci.start(sumo_cmd)
         if not self.use_default:

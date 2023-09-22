@@ -46,7 +46,9 @@ class GroupCategorical(nn.Module):
     def sample(self, return_indices: bool = False):
         if self.logits is not None:
             # Gumbel-max trick
-            z = self.gumbel_dist.sample(self.logits.shape).to(self.logits.get_device())
+            device = self.logits.get_device()
+            device = "cpu" if device == -1 else f"cuda:{device}"
+            z = self.gumbel_dist.sample(self.logits.shape).to(device)
             return group_argmax(self.logits + z, self.index, return_indices=return_indices)
         return group_categorical_sample(self.probs, self.index, return_indices=return_indices)
 

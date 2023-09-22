@@ -1,147 +1,142 @@
+from copy import copy
+from typing import Dict, List, Tuple
+
 import torch
 from torch import nn
+from torch_geometric.data import HeteroData
 from torch_geometric.typing import Adj
 
-from src.modules.message_passing import HomoNeighborhoodAttention, HeteroNeighborhoodAttention
 from src.modules.base_modules import ResidualStack
+from src.modules.message_passing import NeighborhoodAttention
+from src.modules.utils import group_sum, group_mean
 
 
-class GeneraLightLaneDemandEmbedding(nn.Module):
+class TransferLightGraphEmbedding(nn.Module):
 
     def __init__(
             self,
-            lane_segment_dim: int,
-            lane_dim: int,
-            lane_segment_to_lane_edge_dim: int,
-            output_dim: int,
+            node_dims: Dict,
+            edge_dims: Dict,
+            pos: Dict,
+            hidden_dim: int,
+            node_updates: List,
             heads: int,
             n_residuals: int,
             dropout_prob: float
     ):
-        super(GeneraLightLaneDemandEmbedding, self).__init__()
-        self.lane_demand_embedding = HeteroNeighborhoodAttention(
-            lane_segment_dim, lane_dim, lane_segment_to_lane_edge_dim, output_dim, heads, n_residuals,
-            dropout_prob=dropout_prob)
+        super(TransferLightGraphEmbedding, self).__init__()
+        self.node_dims = node_dims
+        self.edge_dims = edge_dims
+        self.pos = pos
+        self.hidden_dim = hidden_dim
+        self.node_embedding_modules = nn.ModuleList()
+        for dst_node, edges in node_updates:
+            self.node_embedding_modules.append(
+                TransferLightNodeEmbedding(copy(self.node_dims), copy(self.edge_dims), copy(self.pos),
+                                           hidden_dim, dst_node, edges, heads, n_residuals, dropout_prob))
+            self.node_dims[dst_node] = len(edges) * hidden_dim
 
-    def forward(
-            self,
-            lane_segment_x: torch.Tensor,
-            lane_x: torch.Tensor,
-            lane_segment_to_lane_edge_attr: torch.Tensor,
-            lane_segment_to_lane_edge_index: Adj
-    ) -> torch.Tensor:
-        return self.lane_demand_embedding(
-            lane_segment_x, lane_x, lane_segment_to_lane_edge_attr, lane_segment_to_lane_edge_index)
+    def forward(self, graph: HeteroData):
+        for node_embedding_module in self.node_embedding_modules:
+            graph = node_embedding_module(graph)
+        return graph
 
 
-class GeneraLightMovementDemandEmbedding(nn.Module):
+class TransferLightNodeEmbedding(nn.Module):
 
     def __init__(
             self,
-            lane_dim: int,
-            movement_dim: int,
-            lane_to_downstream_movement_edge_dim: int,
-            lane_to_upstream_movement_edge_dim: int,
-            movement_to_movement_edge_dim: int,
-            movement_to_movement_hops: int,
-            output_dim: int,
+            node_dims: Dict,
+            edge_dims: Dict,
+            pos: Dict,
+            hidden_dim: int,
+            dst_node: str,
+            edges: List[Tuple],
             heads: int,
             n_residuals: int,
             dropout_prob: float
     ):
-        super(GeneraLightMovementDemandEmbedding, self).__init__()
-        self.incoming_approach_embedding = HeteroNeighborhoodAttention(
-            lane_dim, movement_dim, lane_to_downstream_movement_edge_dim, output_dim, heads, n_residuals,
-            dropout_prob=dropout_prob)
-        self.outgoing_approach_embedding = HeteroNeighborhoodAttention(
-            lane_dim, movement_dim, lane_to_upstream_movement_edge_dim, output_dim, heads, n_residuals,
-            dropout_prob=dropout_prob)
-        self.combined_movement_embedding = ResidualStack(2 * output_dim, output_dim, n_residuals,
-                                                         last_activation=True, dropout_prob=dropout_prob)
-        self.movement_to_movement_embedding = nn.ModuleList()
-        for _ in range(movement_to_movement_hops):
-            self.movement_to_movement_embedding.append(
-                HomoNeighborhoodAttention(output_dim, movement_to_movement_edge_dim, output_dim, heads, n_residuals,
-                                          dropout_prob=dropout_prob)
-            )
+        super(TransferLightNodeEmbedding, self).__init__()
+        self.dst_node = dst_node
+        self.partial_node_embedding_modules = nn.ModuleDict()
+        self.node_dims = node_dims
+        self.edge_dims = edge_dims
+        self.pos = pos
+        for edge in edges:
+            assert dst_node == edge[2]
+            src_node = edge[0]
+            src_dim = node_dims[src_node]
+            dst_dim = node_dims[dst_node]
+            edge_dim = edge_dims[edge]
+            pos = "alibi" if self.pos[edge] else None
+            self.partial_node_embedding_modules[";".join(edge)] = NeighborhoodAttention(
+                src_dim, dst_dim, edge_dim, hidden_dim, heads, n_residuals, skip_connection=False,
+                dropout_prob=dropout_prob, positional_encoding_method=pos)
 
-    def forward(
-            self,
-            lane_x: torch.Tensor,
-            movement_x: torch.Tensor,
-            lane_to_downstream_movement_edge_attr: torch.Tensor,
-            lane_to_upstream_movement_edge_attr: torch.Tensor,
-            movement_to_movement_edge_attr: torch.Tensor,
-            lane_to_downstream_movement_edge_index: Adj,
-            lane_to_upstream_movement_edge_index: Adj,
-            movement_to_movement_edge_index: Adj,
-    ):
-        incoming_approach_embedding = self.incoming_approach_embedding(
-            lane_x, movement_x, lane_to_downstream_movement_edge_attr, lane_to_downstream_movement_edge_index)
-        outgoing_approach_embedding = self.outgoing_approach_embedding(
-            lane_x, movement_x, lane_to_upstream_movement_edge_attr, lane_to_upstream_movement_edge_index)
-        movement_embedding = self.combined_movement_embedding(
-            torch.cat([incoming_approach_embedding, outgoing_approach_embedding], dim=-1))
-        for movement_to_movement_embedding in self.movement_to_movement_embedding:
-            movement_embedding = movement_to_movement_embedding(
-                movement_embedding, movement_to_movement_edge_attr, movement_to_movement_edge_index)
-        return movement_embedding
+    def forward(self, graph: HeteroData):
+        node_embedding = None
+        for edge, partial_node_embedding_module in self.partial_node_embedding_modules.items():
+            edge = tuple(edge.split(";"))
+            src_node, dst_node = edge[0], edge[2]
+            x_src = graph[src_node].x if self.node_dims[src_node] > 0 else None
+            x_dst = graph[dst_node].x if self.node_dims[dst_node] > 0 else None
+            edge_attr = graph[edge[0], edge[1], edge[2]].edge_attr if self.edge_dims[edge] > 0 else None
+            pos = graph[edge[0], edge[1], edge[2]].pos if self.pos[edge] else None
+            edge_index = graph[edge[0], edge[1], edge[2]].edge_index
+            partial_node_embedding = partial_node_embedding_module(x_src, x_dst, edge_attr, edge_index, pos)
+            if node_embedding is None:
+                node_embedding = partial_node_embedding
+                continue
+            node_embedding = torch.cat([node_embedding, partial_node_embedding], dim=-1)
+        graph[self.dst_node].x = node_embedding
+        return graph
 
 
-class GeneraLightPhaseDemandEmbedding(nn.Module):
+class TransferLightQHead(nn.Module):
 
-    def __init__(
-            self,
-            movement_dim: int,
-            phase_dim: int,
-            movement_to_phase_edge_dim: int,
-            phase_to_phase_edge_dim: int,
-            output_dim: int,
-            heads: int,
-            n_residuals: int,
-            dropout_prob: float
-    ):
-        super(GeneraLightPhaseDemandEmbedding, self).__init__()
-        self.phase_demand_embedding = HeteroNeighborhoodAttention(
-            movement_dim, phase_dim, movement_to_phase_edge_dim, output_dim, heads, n_residuals,
-            dropout_prob=dropout_prob)
-        self.phase_competition = HomoNeighborhoodAttention(
-            output_dim, phase_to_phase_edge_dim, output_dim, heads, n_residuals, dropout_prob=dropout_prob
-        )
+    def __init__(self, node_dims: Dict, edge_dims: Dict, hidden_dim: int):
+        super(TransferLightQHead, self).__init__()
+        self.linear_state_value = nn.Sequential(
+            nn.Linear(node_dims["movement"], hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, 1))
+        self.linear_action_advantage = nn.Sequential(
+            nn.Linear(node_dims["phase"], hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, 1))
 
-    def forward(self, movement_x: torch.Tensor, phase_x: torch.Tensor, movement_to_phase_edge_attr: torch.Tensor,
-                phase_to_phase_edge_attr: torch.Tensor, movement_to_phase_edge_index: Adj,
-                phase_to_phase_edge_index: Adj):
-        phase_demand = self.phase_demand_embedding(movement_x, phase_x, movement_to_phase_edge_attr,
-                                                   movement_to_phase_edge_index)
-        return self.phase_competition(phase_demand, phase_to_phase_edge_attr, phase_to_phase_edge_index)
+    def forward(self, embedded_state: HeteroData):
+        edge_index_movement_to_intersection = embedded_state["movement", "to", "intersection"].edge_index
+        movement_embedding = embedded_state["movement"].x[edge_index_movement_to_intersection[0]]
+        phase_embedding = embedded_state["phase"].x
+        action_index = embedded_state["phase", "to", "intersection"].edge_index[1]
+        state_values = group_sum(self.linear_state_value(movement_embedding), edge_index_movement_to_intersection[1])
+        state_values = state_values[action_index]
+        action_advantages = self.linear_state_value(phase_embedding).squeeze()
+        action_advantages = action_advantages - group_mean(action_advantages, action_index)[action_index]
+        action_values = state_values + action_advantages
+        return action_values.squeeze(), action_index
 
 
-class GeneraLightIntersectionDemandEmbedding(nn.Module):
+class TransferLightActorCriticHead(nn.Module):
 
-    def __init__(
-            self,
-            movement_dim: int,
-            intersection_dim: int,
-            movement_to_intersection_edge_dim: int,
-            output_dim: int,
-            heads: int,
-            n_residuals: int,
-            dropout_prob: float
-    ):
-        super(GeneraLightIntersectionDemandEmbedding, self).__init__()
-        self.intersection_demand_embedding = HeteroNeighborhoodAttention(
-            movement_dim, intersection_dim, movement_to_intersection_edge_dim, output_dim, heads, n_residuals,
-            dropout_prob=dropout_prob
+    def __init__(self, node_dims: Dict, edge_dims: Dict, hidden_dim: int):
+        super(TransferLightActorCriticHead, self).__init__()
+        self.actor = nn.Sequential(
+            nn.Linear(node_dims["phase"], hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, 1))
+        self.critic = nn.Sequential(
+            nn.Linear(node_dims["intersection"], hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, 1))
 
-        )
+    def forward(self, embedded_state: HeteroData):
+        phase_embedding = embedded_state["phase"].x
+        intersection_embedding = embedded_state["intersection"].x
+        state_value = self.critic(intersection_embedding)
+        action_index = embedded_state["phase", "to", "intersection"].edge_index[1]
+        action_logits = self.actor(phase_embedding)
+        return state_value.squeeze(), action_logits.squeeze(), action_index
 
-    def forward(
-            self,
-            movement_x: torch.Tensor,
-            intersection_x: torch.Tensor,
-            movement_to_intersection_edge_attr: torch.Tensor,
-            movement_to_intersection_edge_index: torch.Tensor
-    ):
-        return self.intersection_demand_embedding(movement_x, intersection_x, movement_to_intersection_edge_attr,
-                                                  movement_to_intersection_edge_index)
+

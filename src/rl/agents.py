@@ -12,7 +12,7 @@ from torch_geometric.utils import softmax
 
 from src.data.replay_buffer import ReplayBuffer
 from src.modules.distributions import GroupCategorical
-from src.modules.network_bodies import NetworkBody
+from src.modules.networks import Network
 from src.modules.network_heads import NetworkHead
 from src.modules.base_modules import MultiInputSequential
 from src.modules.utils import group_argmax, group_sum
@@ -20,7 +20,7 @@ from src.params import ACTION_TIME
 from src.rl.environments import MarlEnvironment, MultiprocessingMarlEnvironment
 from src.rl.exploration import ExpDecayEpsGreedyStrategy
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = "cuda:0" if torch.cuda.is_available() else "cpu"
 print(f"Use {device} device")
 
 
@@ -56,9 +56,14 @@ class MaxPressure(IndependentAgents):
         self.actions = None
         self.action_durations = None
 
-    def act(self, state: HeteroData) -> List[int]:
+    def act(self, state: HeteroData, act_random: bool = False) -> List[int]:
         x = state["phase"].x.squeeze().to(device)
         index = state["phase", "to", "intersection"].edge_index[1].to(device)
+        if act_random:
+            x = torch.zeros_like(x)
+            distribution = GroupCategorical(logits=x, index=index)
+            actions = distribution.sample(return_indices=False)
+            return actions.cpu().numpy().tolist()
         max_pressure_actions = group_argmax(x, index)
         if self.initialized:
             action_change = torch.logical_and(self.action_durations >= self.min_phase_steps,
@@ -71,15 +76,16 @@ class MaxPressure(IndependentAgents):
             self.initialized = True
         return self.actions.cpu().numpy().tolist()
 
-    def fit(self, environment: MultiprocessingMarlEnvironment, steps: int = 1_000, checkpoint_path: str = None):
-        while environment.action_step < steps:
+    def fit(self, environment: MultiprocessingMarlEnvironment, steps: int = 1_000, skip_steps: int = 100,
+            checkpoint_path: str = None):
+        while environment.total_step < steps:
             state = environment.reset()
-            episode_rewards = []
             while True:
-                actions = self.act(state)
+                actions = self.act(state, act_random=environment.total_step < skip_steps)
                 next_state, rewards, done = environment.step(actions)
                 state = next_state
-                episode_rewards += rewards
+                if environment.total_step < skip_steps:
+                    continue
                 info = environment.info()
                 print(info["progress"])
                 if done:
@@ -113,8 +119,8 @@ class DQN(IndependentAgents):
             update_steps: int
     ):
         super(DQN, self).__init__()
-        self.online_q_network = NetworkBody.create(network["class_name"], network["init_args"])
-        self.target_q_network = NetworkBody.create(network["class_name"], network["init_args"]).requires_grad_(False)
+        self.online_q_network = Network.create(network["class_name"], network["init_args"])
+        self.target_q_network = Network.create(network["class_name"], network["init_args"]).requires_grad_(False)
         self.optimizer = torch.optim.Adam(self.online_q_network.parameters(), learning_rate)
         self.gamma = discount_factor
         self.tau = mixing_factor
@@ -223,7 +229,7 @@ class DQN(IndependentAgents):
     def _optimization_step(self, loss: torch.Tensor):
         self.optimizer.zero_grad()
         loss.backward()
-        self.optimizer.episode_step()
+        self.optimizer.step()
 
     def _update_target_q_network(self):
         # Polyak averaging to update the parameters of the target network
@@ -257,7 +263,7 @@ class A2C(IndependentAgents):
             gradient_clipping_max_norm: float = 1.0
     ):
         super(A2C, self).__init__()
-        self.network = NetworkBody.create(network["class_name"], network["init_args"])
+        self.network = Network.create(network["class_name"], network["init_args"])
         self.optimizer = torch.optim.Adam(self.parameters(), learning_rate)
 
         self.gamma = discount_factor
@@ -344,7 +350,7 @@ class A2C(IndependentAgents):
         self.optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.parameters(), self.gradient_clipping_max_norm)
-        self.optimizer.episode_step()
+        self.optimizer.step()
 
     def _shared_optimization_step(self, actor_loss: torch.Tensor, critic_loss: torch.Tensor):
         loss = self.actor_loss_weight * actor_loss + self.critic_loss_weight * critic_loss
@@ -352,7 +358,7 @@ class A2C(IndependentAgents):
         self.optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.parameters(), self.gradient_clipping_max_norm)
-        self.optimizer.episode_step()
+        self.optimizer.step()
 
     def _unshared_optimization_step(self, actor_loss: torch.Tensor, critic_loss: torch.Tensor):
         actor_loss = self.actor_loss_weight * actor_loss

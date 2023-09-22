@@ -13,7 +13,7 @@ from src.params import TRAIN_SCENARIOS_ROOT, DEMO_SCENARIOS_ROOT
 
 
 RAND_ITERATIONS = 15
-RAND_MIN_DISTANCE = 100
+RAND_MIN_DISTANCE = 50
 RAND_MAX_DISTANCE = 200
 RAND_MIN_ANGLE = 45
 RAND_NUM_TRIES = 100
@@ -32,7 +32,7 @@ VEHICLE_DEPARTURE_BETA_MIN = 1.0
 VEHICLE_DEPARTURE_BETA_MAX = 5.0
 
 #N_TRAIN_SCENARIOS = 1_000
-N_TRAIN_SCENARIOS = 100
+N_TRAIN_SCENARIOS = 1000
 N_DEMO_SCENARIOS = 1
 
 
@@ -111,6 +111,8 @@ def create_weight_files(net_xml_path: str) -> str:
     other_dst_probas = [(1 - dst_proba) / len(other_dst_nodes) for _ in range(len(other_dst_nodes))]
     src_node_probas = [(src_node, src_proba)] + [(n, p) for n, p in zip(other_src_nodes, other_src_probas)]
     dst_node_probas = [(dst_node, dst_proba)] + [(n, p) for n, p in zip(other_dst_nodes, other_dst_probas)]
+    src_node_probas = [(n, np.random.uniform(low=0.0, high=100.0, size=1)[0]) for n in graph.nodes]
+    dst_node_probas = [(n, np.random.uniform(low=0.0, high=100.0, size=1)[0]) for n in graph.nodes]
     trips_src_xml_path = f"{prefix}.src.xml"
     trips_dst_xml_path = f"{prefix}.dst.xml"
     trips_src_xml_content = f"""
@@ -291,9 +293,74 @@ def random_all_scenarios():
         create_sumocfg_file(sumocfg_path, net_xml_name, rou_xml_name)
 
 
+def fixed_network_scenarios():
+    name_environment = "fixed-network"
+    for i in tqdm(range(N_TRAIN_SCENARIOS + N_DEMO_SCENARIOS)):
+        if i < N_TRAIN_SCENARIOS:
+            name_scenario = get_scenario_name(N_TRAIN_SCENARIOS, i)
+            dir_scenario = os.path.join(TRAIN_SCENARIOS_ROOT, name_environment)
+        else:
+            name_scenario = get_scenario_name(N_DEMO_SCENARIOS, i - N_TRAIN_SCENARIOS + 1)
+            dir_scenario = os.path.join(DEMO_SCENARIOS_ROOT, name_environment)
+        os.makedirs(dir_scenario, exist_ok=True)
+        net_xml_path, trips_xml_path, rou_xml_path, sumocfg_path = get_scenario_paths(dir_scenario, name_scenario)
+        netgenerate_cmd = create_rand_netgenerate_cmd(net_xml_path)
+        netgenerate(*netgenerate_cmd)
+        alpha = np.random.uniform(VEHICLE_DEPARTURE_ALPHA_MIN, VEHICLE_DEPARTURE_ALPHA_MAX)
+        beta = np.random.uniform(VEHICLE_DEPARTURE_BETA_MIN, VEHICLE_DEPARTURE_BETA_MAX)
+        weights_prefix = create_weight_files(net_xml_path)
+        random_trips_cmd = create_random_trips_cmd(net_xml_path, trips_xml_path, rou_xml_path,
+                                                   vehicle_departure_alpha=alpha, vehicle_departure_beta=beta,
+                                                   weight_prefix=weights_prefix)
+        randomTrips(*random_trips_cmd)
+        net_xml_name, rou_xml_name = f"{name_scenario}.net.xml", f"{name_scenario}.rou.xml"
+        create_sumocfg_file(sumocfg_path, net_xml_name, rou_xml_name)
+
+
+def fixed_rate_scenarios():
+    name_environment = "random-all"
+    for i in tqdm(range(N_TRAIN_SCENARIOS + N_DEMO_SCENARIOS)):
+        if i < N_TRAIN_SCENARIOS:
+            name_scenario = get_scenario_name(N_TRAIN_SCENARIOS, i)
+            dir_scenario = os.path.join(TRAIN_SCENARIOS_ROOT, name_environment)
+        else:
+            name_scenario = get_scenario_name(N_DEMO_SCENARIOS, i - N_TRAIN_SCENARIOS + 1)
+            dir_scenario = os.path.join(DEMO_SCENARIOS_ROOT, name_environment)
+        os.makedirs(dir_scenario, exist_ok=True)
+        net_xml_path, trips_xml_path, rou_xml_path, sumocfg_path = get_scenario_paths(dir_scenario, name_scenario)
+        netgenerate_cmd = create_rand_netgenerate_cmd(net_xml_path, seed=counter())
+        netgenerate(*netgenerate_cmd)
+        random_trips_cmd = create_random_trips_cmd(net_xml_path, trips_xml_path, rou_xml_path)
+        randomTrips(*random_trips_cmd)
+        net_xml_name, rou_xml_name = f"{name_scenario}.net.xml", f"{name_scenario}.rou.xml"
+        create_sumocfg_file(sumocfg_path, net_xml_name, rou_xml_name)
+
+
+def fixed_location_scenarios():
+    name_environment = "random-all"
+    for i in tqdm(range(N_TRAIN_SCENARIOS + N_DEMO_SCENARIOS)):
+        if i < N_TRAIN_SCENARIOS:
+            name_scenario = get_scenario_name(N_TRAIN_SCENARIOS, i)
+            dir_scenario = os.path.join(TRAIN_SCENARIOS_ROOT, name_environment)
+        else:
+            name_scenario = get_scenario_name(N_DEMO_SCENARIOS, i - N_TRAIN_SCENARIOS + 1)
+            dir_scenario = os.path.join(DEMO_SCENARIOS_ROOT, name_environment)
+        os.makedirs(dir_scenario, exist_ok=True)
+        net_xml_path, trips_xml_path, rou_xml_path, sumocfg_path = get_scenario_paths(dir_scenario, name_scenario)
+        netgenerate_cmd = create_rand_netgenerate_cmd(net_xml_path, seed=counter())
+        netgenerate(*netgenerate_cmd)
+        alpha = np.random.uniform(VEHICLE_DEPARTURE_ALPHA_MIN, VEHICLE_DEPARTURE_ALPHA_MAX)
+        beta = np.random.uniform(VEHICLE_DEPARTURE_BETA_MIN, VEHICLE_DEPARTURE_BETA_MAX)
+        random_trips_cmd = create_random_trips_cmd(net_xml_path, trips_xml_path, rou_xml_path,
+                                                   vehicle_departure_alpha=alpha, vehicle_departure_beta=beta)
+        randomTrips(*random_trips_cmd)
+        net_xml_name, rou_xml_name = f"{name_scenario}.net.xml", f"{name_scenario}.rou.xml"
+        create_sumocfg_file(sumocfg_path, net_xml_name, rou_xml_name)
+
+
 if __name__ == "__main__":
     #fixed_all_scenarios()
-    random_network_scenarios()
+    #random_network_scenarios()
     #random_rate_scenarios()
-    #random_location_scenarios()
+    random_location_scenarios()
     #random_all_scenarios()

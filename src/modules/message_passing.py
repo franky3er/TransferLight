@@ -33,8 +33,8 @@ class MessagePassing(nn.Module):
         pass
 
     @abstractmethod
-    def message(self, x_src: torch.Tensor, x_dst: torch.Tensor, edge_attr: torch.Tensor, index: torch.LongTensor) \
-            -> torch.Tensor:
+    def message(self, x_src: torch.Tensor, x_dst: torch.Tensor, edge_attr: torch.Tensor, index: torch.LongTensor,
+                pos: torch.LongTensor = None) -> torch.Tensor:
         pass
 
     def aggregate(self, x: torch.Tensor, index: torch.LongTensor, dim_size: int = None) -> torch.Tensor:
@@ -50,52 +50,26 @@ class HeteroMessagePassing(MessagePassing):
     def __init__(self, aggr_fn: str = "sum"):
         super(HeteroMessagePassing, self).__init__(aggr_fn)
 
-    def forward(self, x_src: torch.Tensor, x_dst: torch.Tensor, edge_attr: torch.Tensor, edge_index: Adj)\
-            -> torch.Tensor:
-        return self.propagate(x_src, x_dst, edge_attr, edge_index)
+    def forward(self, x_src: torch.Tensor, x_dst: torch.Tensor, edge_attr: torch.Tensor, edge_index: Adj,
+                pos: torch.LongTensor = None) -> torch.Tensor:
+        return self.propagate(x_src, x_dst, edge_attr, edge_index, pos)
 
-    def propagate(self, x_src: torch.Tensor, x_dst: torch.Tensor, edge_attr: torch.Tensor, edge_index: Adj)\
-            -> torch.Tensor:
+    def propagate(self, x_src: torch.Tensor, x_dst: torch.Tensor, edge_attr: torch.Tensor, edge_index: Adj,
+                  pos: torch.LongTensor = None) -> torch.Tensor:
+        dim_size = x_dst.size(0) if x_dst is not None else None
         x_src_expanded, x_dst_expanded = None, None
         if x_src is not None:
             x_src_expanded = x_src[edge_index[0]]
         if x_dst is not None:
             x_dst_expanded = x_dst[edge_index[1]]
         index = edge_index[1]
-        messages = self.message(x_src_expanded, x_dst_expanded, edge_attr, index)
-        aggr_messages = self.aggregate(messages, index)
-        return self.update(x_dst, aggr_messages)
-
-    @abstractmethod
-    def message(self, x_src: torch.Tensor, x_dst: torch.Tensor, edge_attr: torch.Tensor, index: torch.LongTensor) \
-            -> torch.Tensor:
-        pass
-
-    @abstractmethod
-    def update(self, x_dst: torch.Tensor, aggr_message: torch.Tensor) -> torch.Tensor:
-        pass
-
-
-class HomoMessagePassing(MessagePassing):
-
-    def __init__(self, aggr_fn: str = "sum"):
-        super(HomoMessagePassing, self).__init__(aggr_fn=aggr_fn)
-
-    def forward(self, x: torch.Tensor, edge_attr: torch.Tensor, edge_index: Adj) -> torch.Tensor:
-        return self.propagate(x, edge_attr, edge_index)
-
-    def propagate(self, x: torch.Tensor, edge_attr: torch.Tensor, edge_index: Adj) -> torch.Tensor:
-        dim_size = x.size(0)
-        x_src, x_dst = x, x
-        x_src_expanded, x_dst_expanded = x[edge_index[0]], x[edge_index[1]]
-        index = edge_index[1]
-        messages = self.message(x_src_expanded, x_dst_expanded, edge_attr, index)
+        messages = self.message(x_src_expanded, x_dst_expanded, edge_attr, index, pos)
         aggr_messages = self.aggregate(messages, index, dim_size=dim_size)
         return self.update(x_dst, aggr_messages)
 
     @abstractmethod
-    def message(self, x_src: torch.Tensor, x_dst: torch.Tensor, edge_attr: torch.Tensor, index: torch.LongTensor) \
-            -> torch.Tensor:
+    def message(self, x_src: torch.Tensor, x_dst: torch.Tensor, edge_attr: torch.Tensor, index: torch.LongTensor,
+                pos: torch.LongTensor = None) -> torch.Tensor:
         pass
 
     @abstractmethod
@@ -103,7 +77,7 @@ class HomoMessagePassing(MessagePassing):
         pass
 
 
-class HeteroNeighborhoodAttention(HeteroMessagePassing):
+class NeighborhoodAttention(HeteroMessagePassing):
 
     def __init__(
             self,
@@ -117,7 +91,7 @@ class HeteroNeighborhoodAttention(HeteroMessagePassing):
             skip_connection: bool = False,
             dropout_prob: float = 0.0
     ):
-        super(HeteroNeighborhoodAttention, self).__init__(aggr_fn="sum")
+        super(NeighborhoodAttention, self).__init__(aggr_fn="sum")
         assert n_residuals >= 1
         assert output_dim % heads == 0.0
         self.heads = heads
@@ -132,7 +106,6 @@ class HeteroNeighborhoodAttention(HeteroMessagePassing):
             slope = slope_first_term * (slope_common_ratio ** torch.arange(heads))
             slope = slope.unsqueeze(0)
             self.slope = nn.Parameter(data=slope, requires_grad=learnable_slope)
-            input_dim -= 1
         elif positional_encoding_method == "learnable":
             edge_dim = edge_dim - 1
             input_dim = src_dim + dst_dim + edge_dim
@@ -158,10 +131,11 @@ class HeteroNeighborhoodAttention(HeteroMessagePassing):
             x_src: torch.Tensor,
             x_dst: torch.Tensor,
             edge_attr: torch.Tensor,
-            index: torch.LongTensor
+            index: torch.LongTensor,
+            pos: torch.LongTensor = None
     ) -> torch.Tensor:
         if self.positional_encoding_method in ["alibi", "alibi_learnable"]:
-            return self._alibi_message(x_src, x_dst, edge_attr, index)
+            return self._alibi_message(x_src, x_dst, edge_attr, index, pos)
         if self.positional_encoding_method in ["sinusoidal"]:
             return self._sinusoidal_positional_encoding_message(x_src, x_dst, edge_attr, index)
         if self.positional_encoding_method == "learnable":
@@ -174,7 +148,8 @@ class HeteroNeighborhoodAttention(HeteroMessagePassing):
             x_src: torch.Tensor,
             x_dst: torch.Tensor,
             edge_attr: torch.Tensor,
-            index: torch.LongTensor
+            index: torch.LongTensor,
+            pos: torch.LongTensor = None
     ) -> torch.Tensor:
         x = concat_features([x_src, x_dst, edge_attr])
         q, k, v = self.q, self.k_layers(x), self.v_layers(x)
@@ -185,10 +160,10 @@ class HeteroNeighborhoodAttention(HeteroMessagePassing):
             x_src: torch.Tensor,
             x_dst: torch.Tensor,
             edge_attr: torch.Tensor,
-            index: torch.LongTensor
+            index: torch.LongTensor,
+            pos: torch.LongTensor = None
     ) -> torch.Tensor:
-        pos = edge_attr[:, :1]
-        edge_attr = edge_attr[:, 1:] if edge_attr.size(1) > 1 else None
+        pos = pos.unsqueeze(-1)
         x = concat_features([x_src, x_dst, edge_attr])
         q, k, v = self.q, self.k_layers(x), self.v_layers(x)
         bias = - self.slope * pos
@@ -199,7 +174,8 @@ class HeteroNeighborhoodAttention(HeteroMessagePassing):
             x_src: torch.Tensor,
             x_dst: torch.Tensor,
             edge_attr: torch.Tensor,
-            index: torch.LongTensor
+            index: torch.LongTensor,
+            pos: torch.LongTensor = None
     ) -> torch.Tensor:
         pass
 
@@ -208,7 +184,8 @@ class HeteroNeighborhoodAttention(HeteroMessagePassing):
             x_src: torch.Tensor,
             x_dst: torch.Tensor,
             edge_attr: torch.Tensor,
-            index: torch.LongTensor
+            index: torch.LongTensor,
+            pos: torch.LongTensor = None
     ) -> torch.Tensor:
         pos = edge_attr[:, :1].squeeze().to(dtype=torch.long)
         max_len = self.pos_embedding.num_embeddings
@@ -223,43 +200,5 @@ class HeteroNeighborhoodAttention(HeteroMessagePassing):
 
     def update(self, x_dst: torch.Tensor, aggr_messages: torch.Tensor) -> torch.Tensor:
         out = self.out_layers(torch.relu(aggr_messages))
-        out = torch.relu(self.identity(x_dst) + out) if self.skip_connection else out
-        return out
-
-
-class HomoNeighborhoodAttention(HomoMessagePassing):
-
-    def __init__(
-            self,
-            input_dim: int,
-            edge_dim: int,
-            output_dim: int,
-            heads: int,
-            n_residuals: int = 2,
-            skip_connection: bool = True,
-            dropout_prob: float = 0.0,
-    ):
-        super(HomoMessagePassing, self).__init__(aggr_fn="sum")
-        combined_input_dim = 2 * input_dim + edge_dim
-        self.heads = heads
-        self.q = nn.Parameter(data=torch.rand(1, output_dim) * 0.1, requires_grad=True)
-        self.k_layers = ResidualStack(combined_input_dim, output_dim, n_residuals, last_activation=False,
-                                      dropout_prob=dropout_prob)
-        self.v_layers = ResidualStack(combined_input_dim, output_dim, n_residuals, last_activation=False,
-                                      dropout_prob=dropout_prob)
-        self.out_layers = ResidualStack(output_dim, output_dim, n_residuals, last_activation=not skip_connection,
-                                        dropout_prob=dropout_prob)
-        if skip_connection:
-            self.identity = nn.Identity() if input_dim == output_dim else nn.Linear(input_dim, output_dim, bias=False)
-        self.skip_connection = skip_connection
-
-    def message(self, x_src: torch.Tensor, x_dst: torch.Tensor, edge_attr: torch.Tensor, index: torch.LongTensor) \
-            -> torch.Tensor:
-        x = concat_features([x_src, x_dst, edge_attr])
-        q, k, v = self.q, self.k_layers(x), self.v_layers(x)
-        return neighborhood_attention(q, k, v, self.heads, index)
-
-    def update(self, x_dst: torch.Tensor, aggr_message: torch.Tensor) -> torch.Tensor:
-        out = self.out_layers(torch.relu(aggr_message))
         out = torch.relu(self.identity(x_dst) + out) if self.skip_connection else out
         return out

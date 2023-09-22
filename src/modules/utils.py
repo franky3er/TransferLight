@@ -9,6 +9,7 @@ def group_argmax(x: torch.Tensor, group_index: torch.Tensor, return_indices: boo
     x = x.squeeze()
     assert x.size(0) == group_index.size(0)
     device = x.get_device()
+    device = "cpu" if device == -1 else f"cuda:{device}"
     dtype = x.dtype
     n_items = x.size(0)
     n_groups = torch.max(group_index) + 1
