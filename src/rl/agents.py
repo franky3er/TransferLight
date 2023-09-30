@@ -1,6 +1,8 @@
 from abc import abstractmethod
+import os.path
+import pathlib
 import sys
-from typing import Any, List, Dict, Tuple, Union
+from typing import Any, List, Dict, Tuple
 
 import torch
 from torch import nn
@@ -13,18 +15,19 @@ from torch_geometric.utils import softmax
 from src.data.replay_buffer import ReplayBuffer
 from src.modules.distributions import GroupCategorical
 from src.modules.networks import Network
-from src.modules.network_heads import NetworkHead
-from src.modules.base_modules import MultiInputSequential
-from src.modules.utils import group_argmax, group_sum
+from src.modules.utils import group_argmax
+from src import params
 from src.params import ACTION_TIME
 from src.rl.environments import MarlEnvironment, MultiprocessingMarlEnvironment
-from src.rl.exploration import ExpDecayEpsGreedyStrategy
-
-device = "cuda:0" if torch.cuda.is_available() else "cpu"
-print(f"Use {device} device")
 
 
-class IndependentAgents(nn.Module):
+class Agent(nn.Module):
+
+    @classmethod
+    def create(cls, class_name: str, init_args: Dict):
+        obj = getattr(sys.modules[__name__], class_name)(**init_args)
+        assert isinstance(obj, Agent)
+        return obj
 
     @abstractmethod
     @torch.no_grad()
@@ -32,7 +35,8 @@ class IndependentAgents(nn.Module):
         pass
 
     @abstractmethod
-    def fit(self, environment: MarlEnvironment, episodes: int = 100, checkpoint_path: str = None):
+    def fit(self, environment: MultiprocessingMarlEnvironment, steps: int = 1_000, skip_steps: int = 100,
+            checkpoint_path: str = None):
         pass
 
     @abstractmethod
@@ -47,7 +51,7 @@ class IndependentAgents(nn.Module):
                 module.bias.data.fill_(0.1)
 
 
-class MaxPressure(IndependentAgents):
+class MaxPressure(Agent):
 
     def __init__(self, min_phase_duration: int, action_time: int = ACTION_TIME):
         super(MaxPressure, self).__init__()
@@ -57,14 +61,10 @@ class MaxPressure(IndependentAgents):
         self.action_durations = None
 
     def act(self, state: HeteroData, act_random: bool = False) -> List[int]:
-        x = state["phase"].x.squeeze().to(device)
-        index = state["phase", "to", "intersection"].edge_index[1].to(device)
-        if act_random:
-            x = torch.zeros_like(x)
-            distribution = GroupCategorical(logits=x, index=index)
-            actions = distribution.sample(return_indices=False)
-            return actions.cpu().numpy().tolist()
-        max_pressure_actions = group_argmax(x, index)
+        x = state["phase"].x.squeeze().to(params.DEVICE)
+        index = state["phase", "to", "intersection"].edge_index[1].to(params.DEVICE)
+        random_actions = GroupCategorical(logits=torch.zeros_like(x), index=index).sample(return_indices=False)
+        max_pressure_actions = group_argmax(x, index) if not act_random else random_actions
         if self.initialized:
             action_change = torch.logical_and(self.action_durations >= self.min_phase_steps,
                                               self.actions != max_pressure_actions)
@@ -78,16 +78,15 @@ class MaxPressure(IndependentAgents):
 
     def fit(self, environment: MultiprocessingMarlEnvironment, steps: int = 1_000, skip_steps: int = 100,
             checkpoint_path: str = None):
+        _ = environment.reset()
         while environment.total_step < steps:
-            state = environment.reset()
             while True:
+                state = environment.state()
                 actions = self.act(state, act_random=environment.total_step < skip_steps)
-                next_state, rewards, done = environment.step(actions)
-                state = next_state
-                if environment.total_step < skip_steps:
-                    continue
+                _, _, done = environment.step(actions)
                 info = environment.info()
-                print(info["progress"])
+                if environment.total_step >= skip_steps:
+                    print(info["progress"])
                 if done:
                     self.phases = []
                     self.action_durations = []
@@ -105,7 +104,7 @@ class MaxPressure(IndependentAgents):
         environment.close()
 
 
-class DQN(IndependentAgents):
+class DQN(Agent):
 
     def __init__(
             self,
@@ -116,7 +115,7 @@ class DQN(IndependentAgents):
             epsilon_greedy_prob: float,
             replay_buffer_size: int,
             batch_size: int,
-            update_steps: int
+            update_steps: int = 1
     ):
         super(DQN, self).__init__()
         self.online_q_network = Network.create(network["class_name"], network["init_args"])
@@ -132,7 +131,7 @@ class DQN(IndependentAgents):
         self.n_workers = None
         self.worker_agent_offsets = None
         self.worker_action_offsets = None
-        self.to(device)
+        self.to(params.DEVICE)
 
     def forward(self, state: HeteroData) -> Tuple[torch.Tensor, torch.LongTensor]:
         action_values, index = self.online_q_network(state)
@@ -161,8 +160,9 @@ class DQN(IndependentAgents):
             action_values_std.cpu(), agent_index.cpu()
 
     def fit(self, environment: MultiprocessingMarlEnvironment, steps: int = 1_000, skip_steps: int = 100,
-            checkpoint_path: str = None):
+            checkpoint_dir: str = None):
         self.train()
+        pathlib.Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
         highest_ema_reward = - sys.float_info.max
         _ = environment.reset()
         while environment.total_step <= steps + skip_steps:
@@ -171,7 +171,7 @@ class DQN(IndependentAgents):
             self.worker_agent_offsets = metadata["agent_offsets"]
             self.worker_action_offsets = metadata["action_offsets"]
             states = environment.state()
-            actions, _, actions_bool_index, _, _, _ = self.act(states.to(device), eps=self.eps)
+            actions, _, actions_bool_index, _, _, _ = self.act(states.to(params.DEVICE), eps=self.eps)
 
             next_states, rewards, done = environment.step(actions)
             if environment.total_step < skip_steps:
@@ -184,9 +184,13 @@ class DQN(IndependentAgents):
 
             info = environment.info()
             print(info["progress"])
-            if checkpoint_path is not None and highest_ema_reward < environment.ema_reward:
-                print(f"Save Checkpoint..")
+            if checkpoint_dir is not None and environment.total_step % 100 == 0:
+                checkpoint_path = os.path.join(checkpoint_dir, f"{environment.total_step}.pt")
+                torch.save(self.state_dict(), checkpoint_path)
+            if checkpoint_dir is not None and highest_ema_reward < environment.ema_reward:
+                print(f"New best..")
                 highest_ema_reward = environment.ema_reward
+                checkpoint_path = os.path.join(checkpoint_dir, "best.pt")
                 torch.save(self.state_dict(), checkpoint_path)
         environment.close()
 
@@ -205,8 +209,8 @@ class DQN(IndependentAgents):
     def _train_step(self):
         for _ in range(self.update_steps):
             states, actions_bool_index, rewards, next_states = self.replay_buffer.sample()
-            q_predictions = self._compute_q_predictions(states.to(device), actions_bool_index.to(device))
-            q_targets = self._compute_q_targets(rewards.to(device), next_states.to(device))
+            q_predictions = self._compute_q_predictions(states.to(params.DEVICE), actions_bool_index.to(params.DEVICE))
+            q_targets = self._compute_q_targets(rewards.to(params.DEVICE), next_states.to(params.DEVICE))
             loss = F.mse_loss(q_predictions, q_targets)
             self._optimization_step(loss)
         self._update_target_q_network()
@@ -239,10 +243,10 @@ class DQN(IndependentAgents):
     @torch.no_grad()
     def demo(self, environment: MarlEnvironment, checkpoint_path: str = None):
         if checkpoint_path is not None:
-            self.load_state_dict(torch.load(checkpoint_path, map_location=device))
+            self.load_state_dict(torch.load(checkpoint_path, map_location=params.DEVICE))
         state = environment.reset()
         while True:
-            state = state.to(device)
+            state = state.to(params.DEVICE)
             actions, _, _, _, _, _ = self.act(state, mc_samples=10)
             state, _, done = environment.step(actions)
             if done:
@@ -250,7 +254,7 @@ class DQN(IndependentAgents):
         environment.close()
 
 
-class A2C(IndependentAgents):
+class A2C(Agent):
 
     def __init__(
             self,
@@ -259,7 +263,7 @@ class A2C(IndependentAgents):
             learning_rate: float = 0.001,
             actor_loss_weight: float = 1.0,
             critic_loss_weight: float = 1.0,
-            entropy_loss_weight: float = 0.001,
+            entropy_loss_weight: float = 0.0,
             gradient_clipping_max_norm: float = 1.0
     ):
         super(A2C, self).__init__()
@@ -273,7 +277,7 @@ class A2C(IndependentAgents):
         self.gradient_clipping_max_norm = gradient_clipping_max_norm
 
         self.apply(self._init_params)
-        self.to(device)
+        self.to(params.DEVICE)
 
     def forward(self, state: BaseData) -> \
             Tuple[torch.Tensor, torch.Tensor, torch.LongTensor]:
@@ -313,18 +317,20 @@ class A2C(IndependentAgents):
         return actions, actions_index, probs_mean, probs_std, agent_index
 
     def fit(self, environment: MultiprocessingMarlEnvironment, steps: int = 1_000, skip_steps: int = 100,
-            checkpoint_path: str = None):
+            checkpoint_dir: str = None):
         self.train()
+        pathlib.Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
         _ = environment.reset()
         highest_ema_reward = - sys.float_info.max
         while environment.total_step <= steps + skip_steps:
             states = environment.state()
-            states = states.to(device)
+            states = states.to(params.DEVICE)
             actions, log_prob_actions, values, entropies = self.full_path(states)
             next_states, rewards, done = environment.step(actions)
             if environment.total_step < skip_steps:
                 continue
-            next_states, rewards = next_states.to(device), rewards.to(device)
+            print("Entropy: ", torch.mean(entropies).item())
+            next_states, rewards = next_states.to(params.DEVICE), rewards.to(params.DEVICE)
             next_values = self.critic_path(next_states)
 
             action_values = rewards + self.gamma * next_values
@@ -337,9 +343,13 @@ class A2C(IndependentAgents):
 
             info = environment.info()
             print(info["progress"])
-            if checkpoint_path is not None and highest_ema_reward < environment.ema_reward:
-                print(f"Save Checkpoint..")
+            if checkpoint_dir is not None and environment.total_step % 100 == 0:
+                checkpoint_path = os.path.join(checkpoint_dir, f"{environment.total_step}.pt")
+                torch.save(self.state_dict(), checkpoint_path)
+            if checkpoint_dir is not None and highest_ema_reward < environment.ema_reward:
+                print(f"New best..")
                 highest_ema_reward = environment.ema_reward
+                checkpoint_path = os.path.join(checkpoint_dir, "best.pt")
                 torch.save(self.state_dict(), checkpoint_path)
 
         environment.close()
@@ -378,10 +388,10 @@ class A2C(IndependentAgents):
     @torch.no_grad()
     def demo(self, environment: MarlEnvironment, checkpoint_path: str = None):
         if checkpoint_path is not None:
-            self.load_state_dict(torch.load(checkpoint_path, map_location=device))
+            self.load_state_dict(torch.load(checkpoint_path, map_location=params.DEVICE))
         state = environment.reset()
         while True:
-            state = state.to(device)
+            state = state.to(params.DEVICE)
             actions = self.act(state, greedy=False, mc_samples=10)[0]
             state, _, done = environment.step(actions)
             if done:

@@ -14,23 +14,13 @@ class TrafficNet(net.Net):
         super(TrafficNet, self).__init__()
         self.intersections, self.signalized_intersections, self.approaches, self.lanes, self.movements, self.phases = (
             None, None, None, None, None, None)
-        self.index_lane_to_neighboring_lane = None
-        self.index_lane_to_down_movement, self.index_lane_to_up_movement = None, None
-        self.index_segment_to_down_movement, self.index_segment_to_up_movement = None, None
-        self.index_movement_to_phase = None
-        self.index_movement_to_intersection, self.index_phase_to_intersection = None, None
-        self.index_movement_to_movement = None
-        self.index_movement_to_down_movement, self.index_movement_to_up_movement = None, None
-        self.index_phase_to_phase = None
+        self.index = None
+        self.pos = None
 
+        self.segments = None
         self.segment_length = None
         self.n_segments = None
-        self.segments = None
         self.include_last_segment = None
-        self.index_segment_to_segment = None
-        self.index_segment_to_up_segment = None
-        self.index_segment_to_down_segment = None
-        self.index_segment_to_lane = None
         self.pos_segment_to_up_segment = None
         self.pos_segment_to_down_segment = None
 
@@ -50,35 +40,46 @@ class TrafficNet(net.Net):
             logic = traci.trafficlight.getCompleteRedYellowGreenDefinition(intersection)[1]
             states = [p.state for p in logic.phases]
             [self.phases.append((intersection, state)) for state in states]
-        self.index_lane_to_down_movement = [(movement[0], movement) for movement in self.movements]
-        self.index_lane_to_up_movement = [(movement[2], movement) for movement in self.movements]
-        self.index_movement_to_phase = [(movement, phase)
-                                        for phase in self.phases
-                                        for movement in self.get_movement_signals(phase).keys()]
-        self.index_phase_to_intersection = [(phase, phase[0]) for phase in self.phases]
-        self.index_movement_to_intersection = [(movement, movement[1]) for movement in self.movements
-                                               if movement[1] in self.signalized_intersections]
-        self.index_movement_to_movement = []
+
+        self.index = dict()
+        self.index[("lane", "to_down", "movement")] = [(movement[0], movement) for movement in self.movements]
+        self.index[("movement", "to_up", "lane")] = [(movement, movement[0]) for movement in self.movements]
+        self.index[("lane", "to_up", "movement")] = [(movement[2], movement) for movement in self.movements]
+        self.index[("movement", "to_down", "lane")] = [(movement, movement[2]) for movement in self.movements]
+        self.index[("movement", "to", "phase")] = [(movement, phase)
+                                                   for phase in self.phases
+                                                   for movement in self.get_movement_signals(phase).keys()]
+        self.index[("phase", "to", "movement")] = [(phase, movement)
+                                                   for phase in self.phases
+                                                   for movement in self.get_movement_signals(phase).keys()]
+        self.index[("phase", "to", "intersection")] = [(phase, phase[0]) for phase in self.phases]
+        self.index[("intersection", "to", "phase")] = [(phase[0], phase) for phase in self.phases]
+        self.index[("movement", "to", "intersection")] = [(movement, movement[1]) for movement in self.movements
+                                                          if movement[1] in self.signalized_intersections]
+        self.index[("intersection", "to", "movement")] = [(movement[1], movement) for movement in self.movements
+                                                          if movement[1] in self.signalized_intersections]
+        self.index[("movement", "to", "movement")] = []
         for intersection in self.signalized_intersections:
             movements = [m for m in self.movements if m[1] == intersection]
-            index_movement_to_movement = list(itertools.permutations(movements, 2))
-            self.index_movement_to_movement += index_movement_to_movement
-        self.index_movement_to_down_movement = [
+            index_movement_to_movement = list(itertools.product(movements, repeat=2))
+            self.index[("movement", "to", "movement")] += index_movement_to_movement
+        self.index[("movement", "to_down", "movement")] = [
             (movement, down_movement)
             for movement in self.movements for down_movement in self.movements
             if self.getLane(movement[2]).getEdge().getID() == self.getLane(down_movement[0]).getEdge().getID()
         ]
-        self.index_movement_to_up_movement = [
+        self.index[("movement", "to_up", "movement")] = [
             (movement, up_movement)
             for movement in self.movements for up_movement in self.movements
             if self.getLane(movement[0]).getEdge().getID() == self.getLane(up_movement[2]).getEdge().getID()
         ]
-        self.index_phase_to_phase = []
+        self.index[("phase", "to", "phase")] = []
         for intersection in self.signalized_intersections:
             phases = self.get_phases(intersection)
-            index_phase_to_phase = list(itertools.combinations(phases, 2))
-            index_phase_to_phase += [(phase_b, phase_a) for phase_a, phase_b in index_phase_to_phase]
-            self.index_phase_to_phase += index_phase_to_phase
+            index_phase_to_phase = list(itertools.product(phases, repeat=2))
+            self.index[("phase", "to", "phase")] += index_phase_to_phase
+
+        self.pos = dict()
 
     def init_segments(self, segment_length: float = None, include_last: bool = False, n_segments: int = None):
         assert bool(segment_length is not None) + bool(n_segments is not None)
@@ -86,9 +87,9 @@ class TrafficNet(net.Net):
         self.n_segments = n_segments
         self.segments = []
         self.include_last_segment = include_last
-        self.index_segment_to_segment = []
-        self.index_segment_to_up_segment = []
-        self.index_segment_to_down_segment = []
+        self.index[("segment", "to", "segment")] = []
+        self.index[("segment", "to_up", "segment")] = []
+        self.index[("segment", "to_down", "segment")] = []
         for lane in self.lanes:
             lane_length = self.getLane(lane).getLength()
             if self.segment_length is not None:
@@ -96,18 +97,19 @@ class TrafficNet(net.Net):
                 n_segments += 1 if lane_length % self.segment_length > 0 and include_last else 0
             segments = [(lane, i) for i in range(n_segments)]
             self.segments += segments
-            self.index_segment_to_segment += list(itertools.permutations(segments, 2))
-            self.index_segment_to_up_segment += list(itertools.combinations_with_replacement(segments, 2))
-            self.index_segment_to_down_segment += list(itertools.combinations_with_replacement(reversed(segments), 2))
-        self.pos_segment_to_up_segment = [s2[1] - s1[1] for s1, s2 in self.index_segment_to_up_segment]
-        self.pos_segment_to_down_segment = [s1[1] - s2[1] for s1, s2 in self.index_segment_to_down_segment]
-        self.index_segment_to_lane = [(segment, segment[0]) for segment in self.segments]
-        self.index_segment_to_down_movement = [(segment, movement)
-                                               for movement in self.movements
-                                               for segment in self.get_segments(movement[0])]
-        self.index_segment_to_up_movement = [(segment, movement)
-                                             for movement in self.movements
-                                             for segment in self.get_segments(movement[2])]
+            self.index[("segment", "to", "segment")] += list(itertools.product(segments, repeat=2))
+            self.index[("segment", "to_up", "segment")] += list(itertools.combinations_with_replacement(segments, 2))
+            self.index[("segment", "to_down", "segment")] += list(itertools.combinations_with_replacement(reversed(segments), 2))
+        self.index[("segment", "to", "lane")] = [(segment, segment[0]) for segment in self.segments]
+        self.index[("lane", "to", "segment")] = [(segment[0], segment) for segment in self.segments]
+        self.index[("segment", "to_down", "movement")] = [(segment, movement)
+                                                          for movement in self.movements
+                                                          for segment in self.get_segments(movement[0])]
+        self.index[("segment", "to_up", "movement")] = [(segment, movement)
+                                                        for movement in self.movements
+                                                        for segment in self.get_segments(movement[2])]
+
+        self.pos["segment"] = [segment[1] for segment in self.segments]
 
     def get_length(self, segment: Tuple[str, int] = None, lane: str = None, approach: str = None) -> float:
         assert bool(segment is not None) + bool(lane is not None) + bool(approach is not None) == 1.0
@@ -176,9 +178,6 @@ class TrafficNet(net.Net):
     def get_movement_signals(self, phase: Tuple[str, str]) -> Dict[str, str]:
         intersection, state = phase
         signals = [*state]
-        connections = traci.trafficlight.getControlledLinks(intersection)
-        #print(connections)
-        #print(intersection, len(signals), len(connections), signals)
         movements = [(con[0][0], intersection, con[0][1])
                      for con in traci.trafficlight.getControlledLinks(intersection)]
         return {(movement[0], movement[1], out_lane.getID()): signal

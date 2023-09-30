@@ -1,71 +1,61 @@
+import argparse
 import os
+import subprocess
+from typing import List
 
-from src.params import SCENARIOS_ROOT
-from src.rl.environments import MultiprocessingMarlEnvironment, MarlEnvironment
-from src.rl.agents import MaxPressure, A2C, DQN
+from src import params
+from src.params import agent_specs, EnvironmentConfig, TRAIN_STEPS, TRAIN_SKIP_STEPS, PROJECT_ROOT
+from src.rl.agents import Agent
+from src.rl.environments import Environment
+
+
+trainable_agent_specs = {name: spec for name, spec in agent_specs.items() if spec.train_scenarios_dir is not None}
+
+parser = argparse.ArgumentParser(
+    prog="Training Program",
+    description="Trains an agent specified by name"
+)
+group = parser.add_mutually_exclusive_group(required=True)
+group.add_argument("-r", "--run", help="train agent(s)", choices=list(trainable_agent_specs.keys()), nargs="+")
+group.add_argument("-a", "--all", help="train all available agents", action="store_true")
+group.add_argument("-l", "--list", help="list available agents", action="store_true")
+parser.add_argument("-d", "--device", help="device name (cpu/cuda)", required=False, default=params.DEVICE)
+
+
+def execute_train_job(agent_name: str):
+    print(f"run train job {agent_name}")
+    agent_spec = trainable_agent_specs[agent_name]
+    results_dir = agent_spec.agent_dir
+    checkpoint_dir = os.path.join(results_dir, "checkpoints")
+    stats_dir = os.path.join(results_dir, "train-stats")
+    vehicle_stats_dir = os.path.join(stats_dir, "vehicle")
+    intersection_stats_dir = os.path.join(stats_dir, "intersection")
+    environment = Environment.create(EnvironmentConfig.MP_MARL["class_name"],
+                                     dict(EnvironmentConfig.MP_MARL["init_args"],
+                                          scenarios_dir=agent_spec.train_scenarios_dir,
+                                          problem_formulation=agent_spec.problem_formulation,
+                                          vehicle_stats_dir=vehicle_stats_dir,
+                                          intersection_stats_dir=intersection_stats_dir))
+    agent = Agent.create(agent_spec.agent_config["class_name"], agent_spec.agent_config["init_args"])
+    agent.fit(environment, steps=TRAIN_STEPS, skip_steps=TRAIN_SKIP_STEPS, checkpoint_dir=checkpoint_dir)
+
+
+def execute_train_jobs(job_names: List[str]):
+    for job_name in job_names:
+        command = f"python {PROJECT_ROOT}/train.py -r {job_name} -d {params.DEVICE}"
+        process = subprocess.Popen(command, shell=True)
+        process.wait()
+
 
 if __name__ == "__main__":
-
-    scenarios_dir = os.path.join(SCENARIOS_ROOT, "train", "random-all")
-    #scenarios_dir = os.path.join(SCENARIOS_ROOT, "train", "fixed-all")
-    max_waiting_time = 300
-    steps = 10_000
-    workers = 64
-    hidden_dim = 64
-    attention_heads = 8
-
-    max_pressure_environment = MultiprocessingMarlEnvironment(scenarios_dir=scenarios_dir, max_patience=max_waiting_time,
-                                                              problem_formulation="MaxPressureProblemFormulation",
-                                                              n_workers=workers)
-    #transferlight_environment = MultiprocessingMarlEnvironment(scenarios_dir=scenarios_dir, max_patience=max_waiting_time,
-    #                                                           problem_formulation="TransferLightProblemFormulation",
-    #                                                           n_workers=workers)
-    #simple_transferlight_environment = MultiprocessingMarlEnvironment(scenarios_dir=scenarios_dir,
-    #                                                           max_patience=max_waiting_time,
-    #                                                           problem_formulation="SimpleTransferLightProblemFormulation",
-    #                                                           n_workers=workers)
-
-
-    q_network = {
-        "class_name": "TransferLightNetwork",
-        "init_args": {
-            "network_type": "QNet",
-            "hidden_dim": hidden_dim,
-            "n_attention_heads": attention_heads,
-            "dropout_prob": 0.1
-        }
-    }
-    q_network = {
-        "class_name": "SimpleTransferLightNetwork",
-        "init_args": {
-            "network_type": "QNet",
-            "hidden_dim": hidden_dim,
-            "n_attention_heads": attention_heads,
-            "dropout_prob": 0.1
-        }
-    }
-
-
-    actor_critic_network = {
-        "class_name": "TransferLightNetwork",
-        "init_args": {
-            "network_type": "ActorCriticNet",
-            "hidden_dim": hidden_dim,
-            "n_attention_heads": attention_heads,
-            "dropout_prob": 0.1
-        }
-    }
-    simple_actor_critic_network = {
-        "class_name": "SimpleTransferLightNetwork",
-        "init_args": {
-            "network_type": "ActorCriticNet",
-            "hidden_dim": hidden_dim,
-            "n_attention_heads": attention_heads,
-            "dropout_prob": 0.1
-        }
-    }
-
-    MaxPressure(10).fit(max_pressure_environment, steps=steps)
-    #A2C(actor_critic_network, entropy_loss_weight=0.001).fit(transferlight_environment, steps=steps, checkpoint_path="agents/A2C/transferlight-actor-critic-checkpoint.pt")
-    #A2C(simple_actor_critic_network, entropy_loss_weight=0.0).fit(simple_transferlight_environment, steps=steps, checkpoint_path="agents/A2C/simple-transferlight-actor-critic-checkpoint.pt")
-    #DQN(q_network, discount_factor=0.9, batch_size=64, replay_buffer_size=10_000, learning_rate=0.01, epsilon_greedy_prob=0.0, mixing_factor=0.01, update_steps=10).fit(generalight_environment, steps=steps, checkpoint_path="agents/DQN/dqn-checkpoint.pt")
+    args = parser.parse_args()
+    params.DEVICE = args.device
+    if args.list:
+        print("\n".join(list(trainable_agent_specs.keys())))
+    elif args.run is not None:
+        if len(args.run) == 1:
+            execute_train_job(args.run[0])
+        else:
+            execute_train_jobs(args.run)
+    elif args.all:
+        execute_train_jobs(list(trainable_agent_specs.keys()))

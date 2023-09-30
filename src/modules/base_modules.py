@@ -2,17 +2,6 @@ import torch
 from torch import nn
 
 
-class MultiInputSequential(nn.Sequential):
-
-    def forward(self, inputs):
-        for module in self._modules.values():
-            if type(inputs) == tuple:
-                inputs = module(*inputs)
-            else:
-                inputs = module(inputs)
-        return inputs
-
-
 class ResidualBlock(nn.Module):
 
     def __init__(self, input_dim: int, output_dim: int, last_activation: bool = True, dropout_prob: float = 0.0):

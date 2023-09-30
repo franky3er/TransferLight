@@ -362,5 +362,6 @@ if __name__ == "__main__":
     #fixed_all_scenarios()
     #random_network_scenarios()
     #random_rate_scenarios()
-    random_location_scenarios()
+    #random_location_scenarios()
     #random_all_scenarios()
+    fixed_network_scenarios()

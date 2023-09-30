@@ -13,13 +13,19 @@ from torch import multiprocessing as mp
 from torch_geometric.data import Batch, Data, HeteroData
 from torch_geometric.data.data import BaseData
 
-from src.callbacks.environment_callbacks import VehicleStats, IntersectionStats
+from src.callbacks.environment_callbacks import VehicleStatsCallback, IntersectionStatsCallback
 from src.params import ACTION_TIME, YELLOW_CHANGE_TIME, ALL_RED_TIME
 from src.rl.problem_formulations import ProblemFormulation
 from src.sumo.net import read_traffic_net
 
 
 class Environment(ABC):
+
+    @classmethod
+    def create(cls, class_name: str, init_args: Dict):
+        obj = getattr(sys.modules[__name__], class_name)(**init_args)
+        assert isinstance(obj, Environment)
+        return obj
 
     @abstractmethod
     def reset(self) -> Any:
@@ -34,11 +40,15 @@ class Environment(ABC):
         pass
 
     @abstractmethod
+    def close(self):
+        pass
+
+    @abstractmethod
     def metadata(self) -> Dict:
         pass
 
     @abstractmethod
-    def close(self):
+    def setup_scenarios(self, scenario_path: str = None, scenarios_dir: str = None):
         pass
 
 
@@ -47,7 +57,8 @@ class MarlEnvironment(Environment):
     def __init__(self, name: str = None, scenario_path: str = None, scenarios_dir: str = None,
                  max_patience: int = sys.maxsize, problem_formulation: str = None, use_default: bool = False,
                  action_time: int = ACTION_TIME, yellow_change_time: int = YELLOW_CHANGE_TIME,
-                 all_red_time: int = ALL_RED_TIME, demo: bool = False):
+                 all_red_time: int = ALL_RED_TIME, demo: bool = False, vehicle_stats_dir: str = None,
+                 intersection_stats_dir: str = None):
         self.name = "1" if name is None else name
         self.scenarios, self.scenarios_dir, self.scenario = None, None, None
         self.setup_scenarios(scenario_path, scenarios_dir)
@@ -62,7 +73,11 @@ class MarlEnvironment(Environment):
         self.total_step, self.total_time, self.episode_step, self.episode_time = 0, 0, 0, 0
         self.rewards = None
         self.action_time, self.yellow_change_time, self.all_red_time = action_time, yellow_change_time, all_red_time
-        self.callbacks = [VehicleStats("results/vehicle"), IntersectionStats("results/intersection")]
+        self.callbacks = []
+        if vehicle_stats_dir is not None:
+            self.callbacks.append(VehicleStatsCallback(vehicle_stats_dir))
+        if intersection_stats_dir is not None:
+            self.callbacks.append(IntersectionStatsCallback(intersection_stats_dir))
 
     def setup_scenarios(self, scenario_path: str = None, scenarios_dir: str = None):
         assert (scenario_path is not None) != (scenarios_dir is not None)
@@ -86,7 +101,6 @@ class MarlEnvironment(Environment):
         self.scenario = next(self.scenarios)
         net_xml_path = os.path.join(self.scenarios_dir,
                                     ET.parse(self.scenario).getroot().find("input").find("net-file").attrib["value"])
-        print(net_xml_path)
         sumo_cmd = [self.sumo, "-c", self.scenario, "--time-to-teleport", str(-1), "--no-warnings"]
         traci.start(sumo_cmd)
         if not self.use_default:
@@ -123,7 +137,7 @@ class MarlEnvironment(Environment):
         max_waiting_time = 0.0 if len(traci.vehicle.getIDList()) == 0 \
             else np.max([traci.vehicle.getWaitingTime(vehID=veh_id) for veh_id in traci.vehicle.getIDList()])
         if max_waiting_time > self.max_patience:
-            print(f"max_waiting_time > max_patience   ({self.scenario})")
+            print(f"Max patience exceeded: ({self.scenario})")
         done = (True if traci.simulation.getMinExpectedNumber() == 0 or max_waiting_time > self.max_patience
                 else False)
         [callback.on_episode_end(self) for callback in self.callbacks if done]
@@ -212,7 +226,7 @@ class MultiprocessingMarlEnvironment(Environment):
     def __init__(self, scenario_path: str = None, scenarios_dir: str = None, max_patience: int = sys.maxsize,
                  problem_formulation: str = None, n_workers: int = 1, use_default: bool = False,
                  action_time: int = ACTION_TIME, yellow_change_time: int = YELLOW_CHANGE_TIME,
-                 all_red_time: int = ALL_RED_TIME):
+                 all_red_time: int = ALL_RED_TIME, vehicle_stats_dir: str = None, intersection_stats_dir: str = None):
         self.scenarios, self.scenarios_dir, self.scenario = None, None, None
         self.setup_scenarios(scenario_path, scenarios_dir)
         self.problem_formulation_name = problem_formulation
@@ -220,6 +234,8 @@ class MultiprocessingMarlEnvironment(Environment):
         self.n_workers = n_workers
         self.use_default = use_default
         self.demo = False
+        self.vehicle_stats_dir = vehicle_stats_dir
+        self.intersection_stats_dir = intersection_stats_dir
         self.pipes = [mp.Pipe() for _ in range(self.n_workers)]
         self.action_time, self.yellow_change_time, self.all_red_time = action_time, yellow_change_time, all_red_time
         self.workers = [mp.Process(target=self.work, args=self._get_work_args(rank))
@@ -246,16 +262,22 @@ class MultiprocessingMarlEnvironment(Environment):
                          if os.path.isfile(os.path.join(scenarios_dir, scenario))
                          and scenario.endswith(".sumocfg")]
             self.scenarios_dir = scenarios_dir
-        self.scenarios = mp.Queue()
+        if self.scenarios is None:
+            self.scenarios = mp.Queue()
+        else:
+            # Flush scenarios queue
+            while self.scenarios.full():
+                _ = self.scenarios.get()
         [self.scenarios.put(scenario) for scenario in scenarios]
 
     def _get_work_args(self, rank: int):
         return rank, self.pipes[rank][1], self.scenarios, self.problem_formulation_name, self.max_patience, \
-            self.use_default, self.action_time, self.yellow_change_time, self.all_red_time
+            self.use_default, self.action_time, self.yellow_change_time, self.all_red_time, self.vehicle_stats_dir, \
+            self.intersection_stats_dir
 
     @staticmethod
     def work(rank, worker_end, scenarios, problem_formulation, max_patience, use_default, action_time,
-             yellow_change_time, all_red_time):
+             yellow_change_time, all_red_time, vehicle_stats_dir, intersection_stats_dir):
         print(f"Worker {rank} started")
         env = None
         while True:
@@ -263,11 +285,13 @@ class MultiprocessingMarlEnvironment(Environment):
             if cmd == "reset":
                 scenario = scenarios.get()
                 scenarios.put(scenario)
+                print(f"Worker {rank} reset: {scenario}")
                 if env is None:
                     env = MarlEnvironment(name=rank, scenario_path=scenario, max_patience=max_patience,
                                           problem_formulation=problem_formulation, use_default=use_default,
                                           action_time=action_time, yellow_change_time=yellow_change_time,
-                                          all_red_time=all_red_time)
+                                          all_red_time=all_red_time, vehicle_stats_dir=vehicle_stats_dir,
+                                          intersection_stats_dir=intersection_stats_dir)
                 else:
                     env.setup_scenarios(scenario_path=scenario)
                 worker_end.send(env.reset(**kwargs))
@@ -280,9 +304,16 @@ class MultiprocessingMarlEnvironment(Environment):
             elif cmd == "info":
                 worker_end.send(env.info())
             else:
+                print(f"Worker {rank} closed")
                 env.close()
                 del env
                 worker_end.close()
+                del worker_end
+                while True:
+                    scenario = scenarios.get()
+                    if scenario == "ALL DONE":
+                        scenarios.put(scenario)
+                        break
                 break
 
     def reset(self) -> Batch:
@@ -375,8 +406,18 @@ class MultiprocessingMarlEnvironment(Environment):
         return actions_
 
     def close(self):
+        self.scenarios.put("ALL DONE")
         self.broadcast_msg(("close", {}))
-        [worker.join() for worker in self.workers]
+        self.scenarios.close()
+        self.scenarios.join_thread()
+        for worker in self.workers:
+            worker.join()
+            worker.close()
+            del worker
+        for pipe in self.pipes:
+            parent_end, _ = pipe
+            parent_end.close()
+            del parent_end
 
     def send_msg(self, msg, rank):
         parent_end, _ = self.pipes[rank]

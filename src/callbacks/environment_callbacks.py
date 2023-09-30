@@ -1,5 +1,5 @@
 import os.path
-from abc import ABC
+from abc import ABC, abstractmethod
 from collections import defaultdict
 
 import libsumo as traci
@@ -30,12 +30,31 @@ class EnvironmentCallback(ABC):
         pass
 
 
-class VehicleStats(EnvironmentCallback):
+class StatsCallback(EnvironmentCallback):
 
     def __init__(self, results_dir: str):
-        super(VehicleStats, self).__init__()
+        super(StatsCallback, self).__init__()
         self.results_dir = results_dir
         self.df = None
+
+    def on_episode_end(self, environment):
+        self._store_results(environment)
+        super().on_episode_end(environment)
+
+    def on_close(self, environment):
+        self._store_results(environment)
+        super().on_close(environment)
+
+    def _store_results(self, environment):
+        if self.df is not None:
+            results_name = f"worker{environment.name}-episode{self.episode}.csv"
+            results_path = os.path.join(self.results_dir, results_name)
+            os.makedirs(self.results_dir, exist_ok=True)
+            self.df.to_csv(results_path, index=False)
+            self.df = None
+
+
+class VehicleStatsCallback(StatsCallback):
 
     def on_step_end(self, environment):
         vehicles = traci.vehicle.getIDList()
@@ -58,29 +77,8 @@ class VehicleStats(EnvironmentCallback):
 
         super().on_step_end(environment)
 
-    def on_episode_end(self, environment):
-        self._store_results(environment)
-        super().on_episode_end(environment)
 
-    def on_close(self, environment):
-        self._store_results(environment)
-        super().on_close(environment)
-
-    def _store_results(self, environment):
-        if self.df is not None:
-            results_name = f"worker{environment.name}-episode{self.episode}.csv"
-            results_path = os.path.join(self.results_dir, results_name)
-            os.makedirs(self.results_dir, exist_ok=True)
-            self.df.to_csv(results_path, index=False)
-            self.df = None
-
-
-class IntersectionStats(EnvironmentCallback):
-
-    def __init__(self, results_dir: str):
-        super(IntersectionStats, self).__init__()
-        self.results_dir = results_dir
-        self.df = None
+class IntersectionStatsCallback(StatsCallback):
 
     def on_step_end(self, environment):
         intersections = traci.trafficlight.getIDList()
@@ -93,3 +91,7 @@ class IntersectionStats(EnvironmentCallback):
             records["normalized_pressure"].append(environment.net.get_pressure(
                 intersection=intersection, method="density"))
             records["waiting_time"] = environment.net.get_waiting_time(intersection=intersection)
+        records = pd.DataFrame(data=records)
+        self.df = records if self.df is None else pd.concat([self.df, records])
+
+        super().on_step_end(environment)
