@@ -1,9 +1,12 @@
 from abc import ABC, abstractmethod
+from collections import namedtuple
 import itertools
+import math
+import ntpath
 import os
 import random
 import sys
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union, NamedTuple
 import xml.etree.ElementTree as ET
 
 import libsumo as traci
@@ -17,6 +20,27 @@ from src.callbacks.environment_callbacks import VehicleStatsCallback, Intersecti
 from src.params import ACTION_TIME, YELLOW_CHANGE_TIME, ALL_RED_TIME
 from src.rl.problem_formulations import ProblemFormulation
 from src.sumo.net import read_traffic_net
+
+
+class AgentMetadata(NamedTuple):
+    name: str
+    n_actions: int
+    action_names: List[str]
+
+
+class MarlEnvMetaData(NamedTuple):
+    scenario_path: str
+    scenario_name: str
+    n_agents: int
+    n_actions: int
+    agents_metadata: List[AgentMetadata]
+
+
+class MPMarlEnvMetaData(NamedTuple):
+    n_workers: int
+    agent_offsets: List[int]
+    action_offsets: List[int]
+    workers_metadata: List[MarlEnvMetaData]
 
 
 class Environment(ABC):
@@ -57,8 +81,7 @@ class MarlEnvironment(Environment):
     def __init__(self, name: str = None, scenario_path: str = None, scenarios_dir: str = None,
                  max_patience: int = sys.maxsize, problem_formulation: str = None, use_default: bool = False,
                  action_time: int = ACTION_TIME, yellow_change_time: int = YELLOW_CHANGE_TIME,
-                 all_red_time: int = ALL_RED_TIME, demo: bool = False, vehicle_stats_dir: str = None,
-                 intersection_stats_dir: str = None):
+                 all_red_time: int = ALL_RED_TIME, demo: bool = False, stats_dir: str = None):
         self.name = "1" if name is None else name
         self.scenarios, self.scenarios_dir, self.scenario = None, None, None
         self.setup_scenarios(scenario_path, scenarios_dir)
@@ -74,10 +97,9 @@ class MarlEnvironment(Environment):
         self.rewards = None
         self.action_time, self.yellow_change_time, self.all_red_time = action_time, yellow_change_time, all_red_time
         self.callbacks = []
-        if vehicle_stats_dir is not None:
-            self.callbacks.append(VehicleStatsCallback(vehicle_stats_dir))
-        if intersection_stats_dir is not None:
-            self.callbacks.append(IntersectionStatsCallback(intersection_stats_dir))
+        if stats_dir is not None:
+            self.callbacks.append(VehicleStatsCallback(stats_dir))
+            self.callbacks.append(IntersectionStatsCallback(stats_dir))
 
     def setup_scenarios(self, scenario_path: str = None, scenarios_dir: str = None):
         assert (scenario_path is not None) != (scenarios_dir is not None)
@@ -148,12 +170,25 @@ class MarlEnvironment(Environment):
     def state(self) -> Batch:
         return self.problem_formulation.get_state()
 
-    def metadata(self) -> Dict:
-        metadata = {
-            "n_agents": len(self.net.signalized_intersections),
-            "n_actions": sum([len(self.net.get_phases(intersection))
-                              for intersection in self.net.signalized_intersections])
-        }
+    def metadata(self) -> MarlEnvMetaData:
+        agents_metadata = []
+        for intersection in self.net.signalized_intersections:
+            phases = self.net.get_phases(intersection)
+            agent_metadata = AgentMetadata(
+                name=intersection,
+                n_actions=len(phases),
+                action_names=[signal for _, signal in phases]
+            )
+            agents_metadata.append(agent_metadata)
+
+        metadata = MarlEnvMetaData(
+            scenario_path=self.scenario,
+            scenario_name=ntpath.split(self.scenario)[1].split('.')[0],
+            n_agents=len(self.net.signalized_intersections),
+            n_actions=sum([len(self.net.get_phases(intersection))
+                           for intersection in self.net.signalized_intersections]),
+            agents_metadata=agents_metadata
+        )
         return metadata
 
     def info(self) -> Dict:
@@ -223,24 +258,26 @@ class MarlEnvironment(Environment):
 
 class MultiprocessingMarlEnvironment(Environment):
 
-    def __init__(self, scenario_path: str = None, scenarios_dir: str = None, max_patience: int = sys.maxsize,
-                 problem_formulation: str = None, n_workers: int = 1, use_default: bool = False,
-                 action_time: int = ACTION_TIME, yellow_change_time: int = YELLOW_CHANGE_TIME,
-                 all_red_time: int = ALL_RED_TIME, vehicle_stats_dir: str = None, intersection_stats_dir: str = None):
-        self.scenarios, self.scenarios_dir, self.scenario = None, None, None
+    def __init__(self, scenario_path: str = None, scenarios_dir: str = None, cycle_scenarios: bool = True,
+                 max_patience: int = sys.maxsize, problem_formulation: str = None, n_workers: int = 1,
+                 use_default: bool = False, action_time: int = ACTION_TIME,
+                 yellow_change_time: int = YELLOW_CHANGE_TIME, all_red_time: int = ALL_RED_TIME,
+                 stats_dir: str = None):
+        self.n_workers = n_workers
+        self.scenarios, self.scenarios_dir, self.scenario, self.n_scenarios = None, None, None, None
+        self.cycle_scenarios = cycle_scenarios
         self.setup_scenarios(scenario_path, scenarios_dir)
         self.problem_formulation_name = problem_formulation
         self.max_patience = max_patience
-        self.n_workers = n_workers
         self.use_default = use_default
         self.demo = False
-        self.vehicle_stats_dir = vehicle_stats_dir
-        self.intersection_stats_dir = intersection_stats_dir
+        self.stats_dir = stats_dir
         self.pipes = [mp.Pipe() for _ in range(self.n_workers)]
         self.action_time, self.yellow_change_time, self.all_red_time = action_time, yellow_change_time, all_red_time
         self.workers = [mp.Process(target=self.work, args=self._get_work_args(rank))
                         for rank in range(self.n_workers)]
         [worker.start() for worker in self.workers]
+        self.worker_done = [False for _ in range(self.n_workers)]
         self.worker_n_agents = None
         self.worker_n_actions = None
         self.agent_worker_assignment = None
@@ -268,30 +305,39 @@ class MultiprocessingMarlEnvironment(Environment):
             # Flush scenarios queue
             while self.scenarios.full():
                 _ = self.scenarios.get()
+        if self.cycle_scenarios and self.n_workers > len(scenarios):
+            repeats = math.ceil(self.n_workers / len(scenarios))
+            scenarios = scenarios * repeats
         [self.scenarios.put(scenario) for scenario in scenarios]
+        if not self.cycle_scenarios:
+            self.scenarios.put("ALL DONE")
 
     def _get_work_args(self, rank: int):
-        return rank, self.pipes[rank][1], self.scenarios, self.problem_formulation_name, self.max_patience, \
-            self.use_default, self.action_time, self.yellow_change_time, self.all_red_time, self.vehicle_stats_dir, \
-            self.intersection_stats_dir
+        return (rank, self.pipes[rank][1], self.scenarios, self.cycle_scenarios, self.problem_formulation_name,
+                self.max_patience, self.use_default, self.action_time, self.yellow_change_time, self.all_red_time,
+                self.stats_dir)
 
     @staticmethod
-    def work(rank, worker_end, scenarios, problem_formulation, max_patience, use_default, action_time,
-             yellow_change_time, all_red_time, vehicle_stats_dir, intersection_stats_dir):
+    def work(rank, worker_end, scenarios, cycle_scenarios, problem_formulation, max_patience, use_default, action_time,
+             yellow_change_time, all_red_time, stats_dir):
         print(f"Worker {rank} started")
         env = None
         while True:
             cmd, kwargs = worker_end.recv()
             if cmd == "reset":
                 scenario = scenarios.get()
-                scenarios.put(scenario)
+                if cycle_scenarios:
+                    scenarios.put(scenario)
+                if scenario == "ALL DONE":
+                    scenarios.put(scenario)
+                    worker_end.send("ALL DONE")
+                    continue
                 print(f"Worker {rank} reset: {scenario}")
                 if env is None:
                     env = MarlEnvironment(name=rank, scenario_path=scenario, max_patience=max_patience,
                                           problem_formulation=problem_formulation, use_default=use_default,
                                           action_time=action_time, yellow_change_time=yellow_change_time,
-                                          all_red_time=all_red_time, vehicle_stats_dir=vehicle_stats_dir,
-                                          intersection_stats_dir=intersection_stats_dir)
+                                          all_red_time=all_red_time, stats_dir=stats_dir)
                 else:
                     env.setup_scenarios(scenario_path=scenario)
                 worker_end.send(env.reset(**kwargs))
@@ -304,9 +350,9 @@ class MultiprocessingMarlEnvironment(Environment):
             elif cmd == "info":
                 worker_end.send(env.info())
             else:
-                print(f"Worker {rank} closed")
-                env.close()
-                del env
+                if not env is None:
+                    env.close()
+                    del env
                 worker_end.close()
                 del worker_end
                 while True:
@@ -315,27 +361,39 @@ class MultiprocessingMarlEnvironment(Environment):
                         scenarios.put(scenario)
                         break
                 break
+        print(f"Worker {rank} closed")
 
-    def reset(self) -> Batch:
+    def reset(self) -> BaseData:
         self.broadcast_msg(("reset", {}))
         states = []
         for rank in range(self.n_workers):
+            if self.worker_done[rank]:
+                continue
             parent_end, _ = self.pipes[rank]
             state = parent_end.recv()
+            if state == "ALL DONE":
+                self.worker_done[rank] = True
+                self.send_msg(("close", {}), rank)
+                continue
             states.append(state)
             self.episode[rank] += 1
             self.episode_step[rank] = 0
+        if all(self.worker_done):
+            return None
         self._update_internal_params()
         states = self._batch_states(states)
         return states
 
-    def step(self, actions: List[int]) -> Tuple[Batch, torch.Tensor, bool]:
+    def step(self, actions: List[int]) -> Tuple[BaseData, torch.Tensor, bool]:
         self.total_step += 1
         actions = self._distribute_actions(actions)
         [self.send_msg(("step", {"actions": actions[rank], "return_info": True}), rank)
-         for rank in range(self.n_workers)]
+         for rank in range(self.n_workers) if not self.worker_done[rank]]
+        worker_done = False
         states, rewards, dones = [], [], []
         for rank in range(self.n_workers):
+            if self.worker_done[rank]:
+                continue
             self.episode_step[rank] += 1
             parent_end, _ = self.pipes[rank]
             state, reward, done, info = parent_end.recv()
@@ -343,37 +401,54 @@ class MultiprocessingMarlEnvironment(Environment):
                 self.episode[rank] += 1
                 self.episode_step[rank] = 0
                 self.send_msg(("reset", {}), rank)
-                _ = parent_end.recv()
+                msg = parent_end.recv()
+                if msg == "ALL DONE":
+                    self.worker_done[rank] = True
+                    self.send_msg(("close", {}), rank)
+                    worker_done = True
+                    continue
             states.append(state)
             rewards.append(reward)
             dones.append(done)
-        if any(dones):
+        if any(dones) or worker_done:
             self._update_internal_params()
+        if all(self.worker_done):
+            return None, None, None
         states, rewards, done = self._batch_states(states), self._batch_rewards(rewards), self._batch_dones(dones)
         self.ema_reward = self.ema_weight * torch.mean(rewards).item() + (1.0 - self.ema_weight) * self.ema_reward
         return states, rewards, done
 
-    def state(self) -> Batch:
+    def state(self) -> BaseData:
         self.broadcast_msg(("state", {}))
         states = []
         for rank in range(self.n_workers):
+            if self.worker_done[rank]:
+                continue
             parent_end, _ = self.pipes[rank]
             state = parent_end.recv()
             states.append(state)
+        if all(self.worker_done):
+            return None
         states = self._batch_states(states)
         return states
 
-    def metadata(self) -> Dict:
+    def metadata(self) -> MPMarlEnvMetaData:
         self.broadcast_msg(("metadata", {}))
-        metadata = {"n_agents": [], "n_actions": []}
+        n_agents, n_actions, workers_metadata = [], [], []
         for rank in range(self.n_workers):
+            if self.worker_done[rank]:
+                continue
             parent_end, _ = self.pipes[rank]
             md = parent_end.recv()
-            metadata["n_agents"].append(md["n_agents"])
-            metadata["n_actions"].append(md["n_actions"])
-        metadata["agent_offsets"] = np.cumsum(metadata["n_agents"]).tolist()
-        metadata["action_offsets"] = np.cumsum(metadata["n_actions"]).tolist()
-        metadata["n_workers"] = self.n_workers
+            n_agents.append(md.n_agents)
+            n_actions.append(md.n_actions)
+            workers_metadata.append(md)
+        metadata = MPMarlEnvMetaData(
+            n_workers=sum([not done for done in self.worker_done]),
+            agent_offsets=np.cumsum(n_agents).tolist(),
+            action_offsets=np.cumsum(n_actions).tolist(),
+            workers_metadata=workers_metadata
+        )
         return metadata
 
     def info(self) -> Dict:
@@ -386,18 +461,26 @@ class MultiprocessingMarlEnvironment(Environment):
                             f'Total Step: {info["total_step"]}  EMA Reward: {info["ema_reward"]} ---')
         return info
 
+    def all_done(self) -> bool:
+        return all(self.worker_done)
+
     def _update_internal_params(self):
         self.worker_n_agents = []
         self.worker_n_actions = []
         self.agent_worker_assignment = []
         self.broadcast_msg(("metadata", {}))
         for rank in range(self.n_workers):
+            if self.worker_done[rank]:
+                self.worker_n_agents.append(0)
+                self.worker_n_actions.append(0)
+                continue
             parent_end, _ = self.pipes[rank]
             metadata = parent_end.recv()
-            self.worker_n_agents.append(metadata["n_agents"])
-            self.worker_n_actions.append(metadata["n_actions"])
+            self.worker_n_agents.append(metadata.n_agents)
+            self.worker_n_actions.append(metadata.n_actions)
         self.agent_worker_assignment = list(itertools.chain(*([rank for _ in range(n_agents)]
-                                                              for rank, n_agents in enumerate(self.worker_n_agents))))
+                                                              for rank, n_agents in enumerate(self.worker_n_agents)
+                                                              if not self.worker_done[rank])))
 
     def _distribute_actions(self, actions: List[int]) -> List[List[int]]:
         actions_ = [[] for _ in range(self.n_workers)]
@@ -406,7 +489,8 @@ class MultiprocessingMarlEnvironment(Environment):
         return actions_
 
     def close(self):
-        self.scenarios.put("ALL DONE")
+        if self.cycle_scenarios:
+            self.scenarios.put("ALL DONE")
         self.broadcast_msg(("close", {}))
         self.scenarios.close()
         self.scenarios.join_thread()
@@ -424,7 +508,7 @@ class MultiprocessingMarlEnvironment(Environment):
         parent_end.send(msg)
 
     def broadcast_msg(self, msg):
-        [parent_end.send(msg) for parent_end, _ in self.pipes]
+        [self.pipes[rank][0].send(msg) for rank in range(self.n_workers) if not self.worker_done[rank]]
 
     @staticmethod
     def _batch_states(states: List[Union[Data, HeteroData]]) -> Batch:

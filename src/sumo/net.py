@@ -175,14 +175,19 @@ class TrafficNet(net.Net):
         movement_signals_ = {(m[0], m[1], self.getLane(m[2]).getEdge().getID()): s for m, s in movement_signals.items()}
         return movement_signals_[movement_]
 
-    def get_movement_signals(self, phase: Tuple[str, str]) -> Dict[str, str]:
+    def get_movement_signals(self, phase: Tuple[str, str], exclude_prohibited: bool = False) \
+            -> Dict[Tuple[str, str, str], str]:
         intersection, state = phase
         signals = [*state]
-        movements = [(con[0][0], intersection, con[0][1])
-                     for con in traci.trafficlight.getControlledLinks(intersection)]
-        return {(movement[0], movement[1], out_lane.getID()): signal
-                for movement, signal in zip(movements, signals)
-                for out_lane in self.getLane(movement[2]).getEdge().getLanes()}
+        movement_signals = {(con[0][0], intersection, out_lane.getID()): signal
+                            for con, signal in zip(traci.trafficlight.getControlledLinks(intersection), signals)
+                            for out_lane in self.getLane(con[0][1]).getEdge().getLanes()
+                            if not exclude_prohibited or (exclude_prohibited and signal != "r")}
+        return movement_signals
+        #return {(movement[0], movement[1], out_lane.getID()): signal
+        #        for movement, signal in zip(movements, signals)
+        #        for out_lane in self.getLane(movement[2]).getEdge().getLanes()
+        #        if signal in ["g", "G"]}
 
     def get_current_movement_signals(self, intersection: str) -> Dict[str, str]:
         current_phase = self.get_current_phase(intersection)
@@ -209,8 +214,7 @@ class TrafficNet(net.Net):
         assert bool(intersection is not None) + bool(movement is not None) + bool(phase is not None) == 1.0
         if intersection is not None:
             assert intersection in self.signalized_intersections
-            movements = [(con[0][0], intersection, con[0][1])
-                         for con in traci.trafficlight.getControlledLinks(intersection)]
+            movements = [movement for movement in self.movements if movement[1] == intersection]
             return abs(sum([self.get_pressure(movement=movement, method=method) for movement in movements]))
         elif movement is not None:
             if method == "count":
@@ -220,7 +224,7 @@ class TrafficNet(net.Net):
             else:
                 raise Exception(f"Pressure Method \"{method}\" not implemented")
         else:
-            movements = list(self.get_movement_signals(phase).keys())
+            movements = list(self.get_movement_signals(phase, exclude_prohibited=True).keys())
             return sum([self.get_pressure(movement=movement, method=method) for movement in movements])
 
     def _get_pressure_count(self, movement: Tuple[str, str, str]):

@@ -16,6 +16,7 @@ TRAIN_SCENARIOS_ROOT = os.path.join(SCENARIOS_ROOT, "train")
 DEMO_SCENARIOS_ROOT = os.path.join(SCENARIOS_ROOT, "demo")
 TEST_SCENARIOS_ROOT = os.path.join(SCENARIOS_ROOT, "test")
 RESULTS_ROOT = os.path.join(PROJECT_ROOT, "results")
+SCRIPTS_ROOT = os.path.join(PROJECT_ROOT, "scripts")
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -28,7 +29,7 @@ else:
     RANDOM_TRIPS_SCRIPT = os.path.join(SUMO_TOOLS, "randomTrips.py")
 PYTHON = "python3"
 
-MAX_PATIENCE = 300
+MAX_PATIENCE = 600
 ACTION_TIME = 10
 YELLOW_CHANGE_TIME = 3
 ALL_RED_TIME = 2
@@ -69,6 +70,78 @@ class TestScenarioDirs(ConfigEnum):
     RANDOM_NETWORK = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.RANDOM_NETWORK)
     RANDOM_LOCATION = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.RANDOM_LOCATION)
     RANDOM_RATE = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.RANDOM_RATE)
+
+
+ScenarioSpec = namedtuple("ScenarioSpec",
+                          ["name", "train_dir", "test_dir", "random_network", "random_rate", "random_location"])
+
+
+scenario_specs = {
+    ScenarioNames.FIXED_ALL: ScenarioSpec(
+        name=ScenarioNames.FIXED_ALL,
+        train_dir=TrainScenariosDirs.FIXED_ALL,
+        test_dir=TestScenarioDirs.FIXED_ALL,
+        random_network=False,
+        random_rate=False,
+        random_location=False
+    ),
+    ScenarioNames.RANDOM_NETWORK: ScenarioSpec(
+        name=ScenarioNames.RANDOM_NETWORK,
+        train_dir=TrainScenariosDirs.RANDOM_NETWORK,
+        test_dir=TestScenarioDirs.RANDOM_NETWORK,
+        random_network=True,
+        random_rate=False,
+        random_location=False
+    ),
+    ScenarioNames.RANDOM_LOCATION: ScenarioSpec(
+        name=ScenarioNames.RANDOM_LOCATION,
+        train_dir=TrainScenariosDirs.RANDOM_LOCATION,
+        test_dir=TestScenarioDirs.RANDOM_LOCATION,
+        random_network=False,
+        random_rate=False,
+        random_location=True
+    ),
+    ScenarioNames.RANDOM_RATE: ScenarioSpec(
+        name=ScenarioNames.RANDOM_RATE,
+        train_dir=TrainScenariosDirs.RANDOM_RATE,
+        test_dir=TestScenarioDirs.RANDOM_RATE,
+        random_network=False,
+        random_rate=True,
+        random_location=False
+    ),
+    ScenarioNames.FIXED_NETWORK: ScenarioSpec(
+        name=ScenarioNames.FIXED_NETWORK,
+        train_dir=TrainScenariosDirs.FIXED_NETWORK,
+        test_dir=TestScenarioDirs.FIXED_NETWORK,
+        random_network=False,
+        random_rate=True,
+        random_location=True
+    ),
+    ScenarioNames.FIXED_LOCATION: ScenarioSpec(
+        name=ScenarioNames.FIXED_LOCATION,
+        train_dir=TrainScenariosDirs.FIXED_LOCATION,
+        test_dir=TestScenarioDirs.FIXED_LOCATION,
+        random_network=True,
+        random_rate=True,
+        random_location=False
+    ),
+    ScenarioNames.FIXED_RATE: ScenarioSpec(
+        name=ScenarioNames.FIXED_RATE,
+        train_dir=TrainScenariosDirs.FIXED_RATE,
+        test_dir=TestScenarioDirs.FIXED_RATE,
+        random_network=True,
+        random_rate=False,
+        random_location=True
+    ),
+    ScenarioNames.RANDOM_ALL: ScenarioSpec(
+        name=ScenarioNames.RANDOM_ALL,
+        train_dir=TrainScenariosDirs.RANDOM_ALL,
+        test_dir=TestScenarioDirs.RANDOM_ALL,
+        random_network=True,
+        random_rate=True,
+        random_location=True
+    )
+}
 
 
 class AgentNames(ConfigEnum):
@@ -168,9 +241,7 @@ class AgentConfigs(ConfigEnum):
     }
     MAX_PRESSURE = {
         "class_name": "MaxPressure",
-        "init_args": {
-            "min_phase_duration": ACTION_TIME
-        }
+        "init_args": {}
     }
 
 
@@ -217,7 +288,8 @@ class EnvironmentConfig(ConfigEnum):
 
 
 AgentSpec = namedtuple("AgentSpecs",
-                       ["agent_name", "agent_config", "agent_dir", "train_scenarios_dir", "problem_formulation"])
+                       ["agent_name", "agent_config", "agent_dir", "train_scenarios_dir", "test_scenarios_dir",
+                        "problem_formulation"])
 
 agent_specs = {
 
@@ -227,6 +299,7 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
         agent_dir=AgentDirs.TRANSFERLIGHT_A2C_FIXED_ALL,
         train_scenarios_dir=TrainScenariosDirs.FIXED_ALL,
+        test_scenarios_dir=TestScenarioDirs.FIXED_ALL,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
     AgentNames.TRANSFERLIGHT_A2C_FIXED_NETWORK: AgentSpec(
@@ -234,6 +307,7 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
         agent_dir=AgentDirs.TRANSFERLIGHT_A2C_FIXED_NETWORK,
         train_scenarios_dir=TrainScenariosDirs.FIXED_NETWORK,
+        test_scenarios_dir=TestScenarioDirs.FIXED_NETWORK,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
     AgentNames.TRANSFERLIGHT_A2C_FIXED_LOCATION: AgentSpec(
@@ -241,6 +315,7 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
         agent_dir=AgentDirs.TRANSFERLIGHT_A2C_FIXED_LOCATION,
         train_scenarios_dir=TrainScenariosDirs.FIXED_LOCATION,
+        test_scenarios_dir=TestScenarioDirs.FIXED_LOCATION,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
     AgentNames.TRANSFERLIGHT_A2C_FIXED_RATE: AgentSpec(
@@ -248,6 +323,7 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
         agent_dir=AgentDirs.TRANSFERLIGHT_A2C_FIXED_RATE,
         train_scenarios_dir=TrainScenariosDirs.FIXED_RATE,
+        test_scenarios_dir=TestScenarioDirs.FIXED_RATE,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
     AgentNames.TRANSFERLIGHT_A2C_RANDOM_ALL: AgentSpec(
@@ -255,6 +331,7 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
         agent_dir=AgentDirs.TRANSFERLIGHT_A2C_RANDOM_ALL,
         train_scenarios_dir=TrainScenariosDirs.RANDOM_ALL,
+        test_scenarios_dir=TestScenarioDirs.RANDOM_ALL,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
     AgentNames.TRANSFERLIGHT_A2C_RANDOM_NETWORK: AgentSpec(
@@ -262,6 +339,7 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
         agent_dir=AgentDirs.TRANSFERLIGHT_A2C_RANDOM_NETWORK,
         train_scenarios_dir=TrainScenariosDirs.RANDOM_NETWORK,
+        test_scenarios_dir=TestScenarioDirs.RANDOM_NETWORK,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
     AgentNames.TRANSFERLIGHT_A2C_RANDOM_LOCATION: AgentSpec(
@@ -269,6 +347,7 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
         agent_dir=AgentDirs.TRANSFERLIGHT_A2C_RANDOM_LOCATION,
         train_scenarios_dir=TrainScenariosDirs.RANDOM_LOCATION,
+        test_scenarios_dir=TestScenarioDirs.RANDOM_LOCATION,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
     AgentNames.TRANSFERLIGHT_A2C_RANDOM_RATE: AgentSpec(
@@ -276,6 +355,7 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
         agent_dir=AgentDirs.TRANSFERLIGHT_A2C_RANDOM_RATE,
         train_scenarios_dir=TrainScenariosDirs.RANDOM_RATE,
+        test_scenarios_dir=TestScenarioDirs.RANDOM_RATE,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
 
@@ -285,6 +365,7 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
         agent_dir=AgentDirs.TRANSFERLIGHT_DQN_FIXED_ALL,
         train_scenarios_dir=TrainScenariosDirs.FIXED_ALL,
+        test_scenarios_dir=TestScenarioDirs.FIXED_ALL,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
     AgentNames.TRANSFERLIGHT_DQN_FIXED_NETWORK: AgentSpec(
@@ -292,6 +373,7 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
         agent_dir=AgentDirs.TRANSFERLIGHT_DQN_FIXED_NETWORK,
         train_scenarios_dir=TrainScenariosDirs.FIXED_NETWORK,
+        test_scenarios_dir=TestScenarioDirs.FIXED_NETWORK,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
     AgentNames.TRANSFERLIGHT_DQN_FIXED_LOCATION: AgentSpec(
@@ -299,6 +381,7 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
         agent_dir=AgentDirs.TRANSFERLIGHT_DQN_FIXED_LOCATION,
         train_scenarios_dir=TrainScenariosDirs.FIXED_LOCATION,
+        test_scenarios_dir=TestScenarioDirs.FIXED_LOCATION,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
     AgentNames.TRANSFERLIGHT_DQN_FIXED_RATE: AgentSpec(
@@ -306,6 +389,7 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
         agent_dir=AgentDirs.TRANSFERLIGHT_DQN_FIXED_RATE,
         train_scenarios_dir=TrainScenariosDirs.FIXED_RATE,
+        test_scenarios_dir=TestScenarioDirs.FIXED_RATE,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
     AgentNames.TRANSFERLIGHT_DQN_RANDOM_ALL: AgentSpec(
@@ -313,6 +397,7 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
         agent_dir=AgentDirs.TRANSFERLIGHT_DQN_RANDOM_ALL,
         train_scenarios_dir=TrainScenariosDirs.RANDOM_ALL,
+        test_scenarios_dir=TestScenarioDirs.RANDOM_ALL,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
     AgentNames.TRANSFERLIGHT_DQN_RANDOM_NETWORK: AgentSpec(
@@ -320,6 +405,7 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
         agent_dir=AgentDirs.TRANSFERLIGHT_DQN_RANDOM_NETWORK,
         train_scenarios_dir=TrainScenariosDirs.RANDOM_NETWORK,
+        test_scenarios_dir=TestScenarioDirs.RANDOM_NETWORK,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
     AgentNames.TRANSFERLIGHT_DQN_RANDOM_LOCATION: AgentSpec(
@@ -327,6 +413,7 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
         agent_dir=AgentDirs.TRANSFERLIGHT_DQN_RANDOM_LOCATION,
         train_scenarios_dir=TrainScenariosDirs.RANDOM_LOCATION,
+        test_scenarios_dir=TestScenarioDirs.RANDOM_LOCATION,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
     AgentNames.TRANSFERLIGHT_DQN_RANDOM_RATE: AgentSpec(
@@ -334,6 +421,7 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
         agent_dir=AgentDirs.TRANSFERLIGHT_DQN_RANDOM_RATE,
         train_scenarios_dir=TrainScenariosDirs.RANDOM_RATE,
+        test_scenarios_dir=TestScenarioDirs.RANDOM_RATE,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
 
@@ -342,7 +430,8 @@ agent_specs = {
         agent_name=AgentNames.MAX_PRESSURE,
         agent_config=AgentConfigs.MAX_PRESSURE,
         agent_dir=AgentDirs.MAX_PRESSURE,
-        train_scenarios_dir=None,
+        train_scenarios_dir=TrainScenariosDirs.FIXED_ALL,
+        test_scenarios_dir=None,
         problem_formulation=ProblemFormulationConfig.MAX_PRESSURE
     )
 }

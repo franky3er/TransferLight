@@ -6,7 +6,7 @@ from torch import nn
 from torch_geometric.data import HeteroData
 
 from src.rl.problem_formulations import TransferLightProblemFormulation
-from src.modules.message_passing import HeteroNeighborhoodAttention
+from src.modules.message_passing import HeteroMessagePassing
 from src.modules.utils import group_mean
 
 
@@ -54,10 +54,15 @@ class TransferLightGraphEmbedding(nn.Module):
             dropout_prob: float = 0.0
     ):
         super(TransferLightGraphEmbedding, self).__init__()
+        message_fct = {"class_name": "AttentionMessage",
+                       "init_args": {"heads": n_attention_heads, "dropout_prob": dropout_prob}}
+        aggregation_fct = "sum"
+        update_fct = {"class_name": "StandardUpdate",
+                      "init_args": {"dropout_prob": dropout_prob}}
         updates = [
-            [("segment", "to", "segment")],
-            [("segment", "to_down", "movement"), ("segment", "to_up", "movement")],
-            [("movement", "to", "movement")],
+            #[("segment", "to", "segment")],
+            #[("segment", "to_down", "movement"), ("segment", "to_up", "movement")],
+            #[("movement", "to", "movement")],
             [("movement", "to", "phase")],
             [("phase", "to", "phase")],
             [("phase", "to", "intersection")]
@@ -65,7 +70,7 @@ class TransferLightGraphEmbedding(nn.Module):
         self.layers = nn.ModuleList()
         for edge_types in updates:
             self.layers.append(TransferLightGraphEmbeddingLayer(edge_types, node_dims, edge_dims, hidden_dim,
-                                                                n_attention_heads, dropout_prob))
+                                                                message_fct, aggregation_fct, update_fct))
             updated_nodes = {node for _, _, node in edge_types}
             node_dims = {node: hidden_dim if node in updated_nodes else dim for node, dim in node_dims.items()}
 
@@ -83,8 +88,9 @@ class TransferLightGraphEmbeddingLayer(nn.Module):
             node_dims: Dict,
             edge_dims: Dict,
             hidden_dim: int,
-            n_attention_heads: int = 8,
-            dropout_prob: float = 0.0
+            message_fct: Dict,
+            aggregation_fct: str,
+            update_fct: Dict
     ):
         super(TransferLightGraphEmbeddingLayer, self).__init__()
         node_edge_types = defaultdict(lambda: [])
@@ -93,9 +99,8 @@ class TransferLightGraphEmbeddingLayer(nn.Module):
             node_edge_types[dst_node].append(edge_type)
         self.node_updates = nn.ModuleDict()
         for node, edge_types in node_edge_types.items():
-            self.node_updates[node] = HeteroNeighborhoodAttention(edge_types, node_dims, edge_dims, hidden_dim,
-                                                                  heads=n_attention_heads, dropout_prob=dropout_prob,
-                                                                  skip_connection=True)
+            self.node_updates[node] = HeteroMessagePassing(edge_types, node_dims, edge_dims, hidden_dim, message_fct,
+                                                           aggregation_fct, update_fct, skip_connection=True)
 
     def forward(self, graph: HeteroData):
         node_updates = {node: update(graph) for node, update in self.node_updates.items()}

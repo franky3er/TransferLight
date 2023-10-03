@@ -1,4 +1,5 @@
 from abc import abstractmethod
+import sys
 from typing import List, Tuple, Dict
 
 import torch
@@ -38,7 +39,7 @@ class MessagePassing(nn.Module):
         pass
 
 
-class HeteroNeighborhoodAttention(MessagePassing):
+class HeteroMessagePassing(MessagePassing):
 
     def __init__(
             self,
@@ -46,11 +47,12 @@ class HeteroNeighborhoodAttention(MessagePassing):
             node_dims: Dict,
             edge_dims: Dict,
             output_dim: int,
-            heads: int,
-            skip_connection: bool = False,
-            dropout_prob: float = 0.0
+            message_fct: Dict,
+            aggregation_fct: str,
+            update_fct: Dict,
+            skip_connection: bool = False
     ):
-        super(HeteroNeighborhoodAttention, self).__init__(agg_fct="sum")
+        super(HeteroMessagePassing, self).__init__(agg_fct=aggregation_fct)
         dst_node = list(set([edge_type[2] for edge_type in edge_types]))
         assert len(dst_node) == 1
         self.dst_node = dst_node[0]
@@ -58,16 +60,28 @@ class HeteroNeighborhoodAttention(MessagePassing):
         self.node_dims, self.edge_dims = node_dims, edge_dims
         self.msg_fct = None
         self.msg_fcts = nn.ModuleDict()
-        message_dim = 0
+        msg_dim = 0
         for edge in edge_types:
             src_node = edge[0]
             src_dim = node_dims[src_node]
             edge_dim = edge_dims[edge]
-            self.msg_fcts["|".join(edge)] = AttentionMessage(src_dim, dst_dim, edge_dim, output_dim, heads,
-                                                             dropout_prob)
-            message_dim += output_dim
-        self.upd_fct = ResidualBlock(message_dim, output_dim, last_activation=not skip_connection,
-                                     dropout_prob=dropout_prob)
+            msg_fct_class_name = message_fct["class_name"]
+            msg_fct_init_args = message_fct["init_args"]
+            msg_fct_init_args["src_dim"] = src_dim
+            msg_fct_init_args["dst_dim"] = dst_dim
+            msg_fct_init_args["edge_dim"] = edge_dim
+            msg_fct_init_args["output_dim"] = output_dim
+            self.msg_fcts["|".join(edge)] = MessageFct.create(msg_fct_class_name, msg_fct_init_args)
+            msg_dim += output_dim
+        upd_fct_class_name = update_fct["class_name"]
+        upd_fct_init_args = update_fct["init_args"]
+        if "dst_dim" not in upd_fct_init_args.keys():
+            upd_fct_init_args["dst_dim"] = dst_dim
+        if "msg_dim" not in upd_fct_init_args.keys():
+            upd_fct_init_args["msg_dim"] = msg_dim
+        if "output_dim" not in upd_fct_init_args.keys():
+            upd_fct_init_args["output_dim"] = output_dim
+        self.upd_fct = UpdateFct.create(upd_fct_class_name, upd_fct_init_args)
         self.skip_connection = skip_connection
         if skip_connection:
             self.identity = nn.Identity() if dst_dim == output_dim else nn.Linear(dst_dim, output_dim, bias=False)
@@ -102,11 +116,27 @@ class HeteroNeighborhoodAttention(MessagePassing):
         return self.msg_fcts[self.msg_fct](x_src, x_dst, edge_attr, index)
 
     def update(self, x_dst: torch.Tensor, aggr_message: torch.Tensor) -> torch.Tensor:
-        x_dst_upd = self.upd_fct(aggr_message)
+        x_dst_upd = self.upd_fct(x_dst, aggr_message)
         return torch.relu(self.identity(x_dst) + x_dst_upd) if self.skip_connection else x_dst_upd
 
 
-class AttentionMessage(nn.Module):
+class MessageFct(nn.Module):
+
+    @classmethod
+    def create(cls, class_name: str, init_args: Dict):
+        obj = getattr(sys.modules[__name__], class_name)(**init_args)
+        assert isinstance(obj, MessageFct)
+        return obj
+
+    def __init__(self, src_dim: int, dst_dim: int, edge_dim: int, output_dim: int):
+        super(MessageFct, self).__init__()
+
+    @abstractmethod
+    def forward(self, x_src: torch.Tensor, x_dst: torch.Tensor, edge_attr: torch.Tensor, index: torch.LongTensor):
+        pass
+
+
+class StandardMessage(MessageFct):
 
     def __init__(
             self,
@@ -114,10 +144,29 @@ class AttentionMessage(nn.Module):
             dst_dim: int,
             edge_dim: int,
             output_dim: int,
-            heads: int,
             dropout_prob: float = 0.0
     ):
-        super(AttentionMessage, self).__init__()
+        super(StandardMessage, self).__init__(src_dim, dst_dim, edge_dim, output_dim)
+        input_dim = src_dim + dst_dim + edge_dim
+        self.msg_fct = ResidualBlock(input_dim, output_dim, dropout_prob=dropout_prob)
+
+    def forward(self, x_src: torch.Tensor, x_dst: torch.Tensor, edge_attr: torch.Tensor, index: torch.LongTensor):
+        x = concat_features([x_dst, x_dst, edge_attr])
+        return self.msg_fct(x)
+
+
+class AttentionMessage(MessageFct):
+
+    def __init__(
+            self,
+            src_dim: int,
+            dst_dim: int,
+            edge_dim: int,
+            output_dim: int,
+            heads: int = 1,
+            dropout_prob: float = 0.0
+    ):
+        super(AttentionMessage, self).__init__(src_dim, dst_dim, edge_dim, output_dim)
         input_dim = src_dim + dst_dim + edge_dim
         self.heads = heads
         self.q = nn.Parameter(data=torch.rand(1, output_dim) * 0.1, requires_grad=True)
@@ -128,6 +177,43 @@ class AttentionMessage(nn.Module):
         x = concat_features([x_src, x_dst, edge_attr])
         q, k, v = self.q, self.k_fct(x), self.v_fct(x)
         return neighborhood_attention(q, k, v, self.heads, index)
+
+
+class UpdateFct(nn.Module):
+
+    @classmethod
+    def create(cls, class_name: str, init_args: Dict):
+        obj = getattr(sys.modules[__name__], class_name)(**init_args)
+        assert isinstance(obj, UpdateFct)
+        return obj
+
+    def __init__(self, dst_dim: int, msg_dim: int, output_dim: int):
+        super(UpdateFct, self).__init__()
+
+    @abstractmethod
+    def forward(self, x_dst: torch.Tensor, aggr_message: torch.Tensor):
+        pass
+
+
+class StandardUpdate(UpdateFct):
+
+    def __init__(
+            self,
+            dst_dim: int,
+            msg_dim: int,
+            output_dim: int,
+            include_dst: float = False,
+            dropout_prob: float = 0.0
+    ):
+        super(StandardUpdate, self).__init__(dst_dim, msg_dim, output_dim)
+        input_dim = dst_dim + msg_dim if include_dst else msg_dim
+        self.include_dst = include_dst
+        self.upd_fct = ResidualBlock(input_dim, output_dim, dropout_prob=dropout_prob)
+
+    def forward(self, x_dst: torch.Tensor, aggr_message: torch.Tensor):
+        x = concat_features([x_dst, aggr_message]) if self.include_dst else aggr_message
+        return self.upd_fct(x)
+
 
 
 class NeighborhoodAttention(MessagePassing):

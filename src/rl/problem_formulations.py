@@ -4,6 +4,7 @@ import sys
 from typing import Any, List, Tuple
 
 import torch
+import traci
 from sumolib.net import Net
 from torch_geometric.data import HeteroData
 
@@ -40,21 +41,60 @@ class ProblemFormulation(ABC):
 
 class MaxPressureProblemFormulation(ProblemFormulation):
 
+    @classmethod
+    def get_metadata(cls):
+        metadata = dict()
+
+        node_dim = defaultdict(lambda: 0)
+        node_dim["movement"] = 2
+        node_dim["phase"] = 1
+        node_dim["intersection"] = 1
+        metadata["node_dim"] = node_dim
+
+        edge_dim = defaultdict(lambda: 0)
+        metadata["edge_dim"] = edge_dim
+        return metadata
+
     def get_state(self) -> HeteroData:
         data = HeteroData()
-        phase_pressures = defaultdict(lambda: 0.0)
-        for movement, phase in self.net.index[("movement", "to", "phase")]:
-            signal = self.net.get_movement_signals(phase)[movement]
-            if signal not in ["G", "g"]:
-                continue
-            pressure = self.net.get_pressure(movement=movement, method="count")
-            phase_pressures[phase] += pressure
-        x = [[phase_pressures[phase]] for phase in self.net.phases]
-        data["phase"].x = torch.tensor(x)
+        data["movement"].x = self.get_movement_features()
+        data["phase"].x = self.get_phase_features()
         data["intersection"].x = torch.zeros(len(self.net.signalized_intersections), 1)
+        edge_index_movement_to_phase = []
+        for phase in self.net.phases:
+            movements_signals = self.net.get_movement_signals(phase)
+            movements = [movement for movement, signal in movements_signals.items() if signal in ["g", "G"]]
+            edge_index_movement_to_phase += [(movement, phase) for movement in movements]
+        data["movement", "to", "phase"].edge_index = to_edge_index(
+            edge_index_movement_to_phase, self.net.movements, self.net.phases)
+        data["phase", "to", "phase"].edge_index = to_edge_index(
+            self.net.index["phase", "to", "phase"], self.net.phases, self.net.phases)
         data["phase", "to", "intersection"].edge_index = to_edge_index(
             self.net.index[("phase", "to", "intersection")], self.net.phases, self.net.signalized_intersections)
         return data
+
+    def get_movement_features(self):
+        x = []
+        for movement in self.net.movements:
+            in_lane, _, out_lane = movement
+            in_lane_veh = self.net.get_vehicle_density(lane=in_lane)
+            out_lane_veh = self.net.get_vehicle_density(lane=out_lane)
+            x.append([in_lane_veh, out_lane_veh])
+        return torch.tensor(x, dtype=torch.float32)
+
+    def get_phase_features(self):
+        x = []
+        for phase in self.net.phases:
+            intersection, _ = phase
+            active = int(self.net.get_current_phase(intersection=intersection) == phase)
+            x.append([active])
+        return torch.tensor(x, dtype=torch.float32)
+
+    def get_intersection_features(self):
+        x = []
+        for _ in self.net.intersections:
+            x.append([0.0])
+        return torch.tensor(x, dtype=torch.float32)
 
     def get_rewards(self) -> torch.Tensor:
         return - torch.tensor([self.net.get_pressure(intersection=intersection, method="density")
@@ -72,8 +112,9 @@ class TransferLightProblemFormulation(ProblemFormulation):
         metadata = dict()
 
         node_dim = defaultdict(lambda: 0)
-        node_dim["segment"] = 9
-        node_dim["movement"] = 3
+        #node_dim["segment"] = 9
+        #node_dim["movement"] = 3
+        node_dim["movement"] = 2
         node_dim["phase"] = 1
         node_dim["intersection"] = 1
         metadata["node_dim"] = node_dim
@@ -92,19 +133,23 @@ class TransferLightProblemFormulation(ProblemFormulation):
 
     def get_state(self) -> HeteroData:
         data = HeteroData()
-        data["segment"].x = self.get_segment_features()
+        #data["segment"].x = self.get_segment_features()
         data["movement"].x = self.get_movement_features()
         data["phase"].x = self.get_phase_features()
         data["intersection"].x = self.get_intersection_features()
 
-        data["segment", "to", "segment"].edge_index = to_edge_index(
-            self.net.index[("segment", "to", "segment")], self.net.segments, self.net.segments)
-        data["segment", "to_down", "movement"].edge_index = to_edge_index(
-            self.net.index[("segment", "to_down", "movement")], self.net.segments, self.net.movements)
-        data["segment", "to_up", "movement"].edge_index = to_edge_index(
-            self.net.index[("segment", "to_up", "movement")], self.net.segments, self.net.movements)
-        data["movement", "to", "movement"].edge_index = to_edge_index(
-            self.net.index[("movement", "to", "movement")], self.net.movements, self.net.movements)
+        #data["segment", "to", "segment"].edge_index = to_edge_index(
+        #    self.net.index[("segment", "to", "segment")], self.net.segments, self.net.segments)
+        #data["segment", "to_down", "movement"].edge_index = to_edge_index(
+        #    self.net.index[("segment", "to_down", "movement")], self.net.segments, self.net.movements)
+        #data["segment", "to_up", "movement"].edge_index = to_edge_index(
+        #    self.net.index[("segment", "to_up", "movement")], self.net.segments, self.net.movements)
+        #data["movement", "to", "movement"].edge_index = to_edge_index(
+        #    self.net.index[("movement", "to", "movement")], self.net.movements, self.net.movements)
+        #data["movement", "to_down", "movement"].edge_index = to_edge_index(
+        #    self.net.index[("movement", "to_down", "movement")], self.net.movements, self.net.movements)
+        #data["movement", "to_up", "movement"].edge_index = to_edge_index(
+        #    self.net.index[("movement", "to_up", "movement")], self.net.movements, self.net.movements)
         data["movement", "to", "phase"].edge_index = to_edge_index(
             self.net.index[("movement", "to", "phase")], self.net.movements, self.net.phases)
         data["phase", "to", "phase"].edge_index = to_edge_index(
@@ -112,7 +157,7 @@ class TransferLightProblemFormulation(ProblemFormulation):
         data["phase", "to", "intersection"].edge_index = to_edge_index(
             self.net.index[("phase", "to", "intersection")], self.net.phases, self.net.signalized_intersections)
 
-        data["movement", "to", "movement"].edge_attr = self.get_movement_to_movement_edge_attr()
+        #data["movement", "to", "movement"].edge_attr = self.get_movement_to_movement_edge_attr()
         data["movement", "to", "phase"].edge_attr = self.get_movement_to_phase_edge_attr()
         data["phase", "to", "phase"].edge_attr = self.get_phase_to_phase_edge_attr()
 
@@ -132,14 +177,22 @@ class TransferLightProblemFormulation(ProblemFormulation):
     def get_movement_features(self):
         x = []
         for movement in self.net.movements:
-            signal = self.net.get_current_signal(movement)
-            signal = [int(signal == "G"), int(signal == "g"), int(signal == "r")]
-            x.append(signal)
+            in_lane, _, out_lane = movement
+            in_lane_density = self.net.get_vehicle_density(lane=in_lane)
+            out_lane_density = self.net.get_vehicle_density(lane=out_lane)
+            x.append([in_lane_density, out_lane_density])
+            #signal = self.net.get_current_signal(movement)
+            #signal = [int(signal == "G"), int(signal == "g"), int(signal == "r")]
+            #x.append(signal)
         return torch.tensor(x, dtype=torch.float32)
 
     def get_phase_features(self):
-        return torch.tensor([[int(phase == self.net.get_current_phase(phase[0]))] for phase in self.net.phases],
-                            dtype=torch.float32)
+        x = []
+        for phase in self.net.phases:
+            intersection, signal = phase
+            active = int(self.net.get_current_phase(intersection=intersection) == phase)
+            x.append([active])
+        return torch.tensor(x, dtype=torch.float32)
 
     def get_intersection_features(self):
         return torch.tensor([[0.0] for _ in self.net.signalized_intersections], dtype=torch.float32)

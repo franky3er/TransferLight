@@ -15,10 +15,9 @@ from torch_geometric.utils import softmax
 from src.data.replay_buffer import ReplayBuffer
 from src.modules.distributions import GroupCategorical
 from src.modules.networks import Network
-from src.modules.utils import group_argmax
+from src.modules.utils import group_argmax, group_sum
 from src import params
-from src.params import ACTION_TIME
-from src.rl.environments import MarlEnvironment, MultiprocessingMarlEnvironment
+from src.rl.environments import MarlEnvironment, MultiprocessingMarlEnvironment, MPMarlEnvMetaData
 
 
 class Agent(nn.Module):
@@ -40,6 +39,10 @@ class Agent(nn.Module):
         pass
 
     @abstractmethod
+    def test(self, environment: MultiprocessingMarlEnvironment, checkpoint_path: str = None, stats_dir: str = None):
+        pass
+
+    @abstractmethod
     def demo(self, environment: MarlEnvironment, checkpoint_path: str = None):
         pass
 
@@ -53,31 +56,23 @@ class Agent(nn.Module):
 
 class MaxPressure(Agent):
 
-    def __init__(self, min_phase_duration: int, action_time: int = ACTION_TIME):
-        super(MaxPressure, self).__init__()
-        self.min_phase_steps = min_phase_duration // action_time
-        self.initialized = False
-        self.actions = None
-        self.action_durations = None
-
-    def act(self, state: HeteroData, act_random: bool = False) -> List[int]:
-        x = state["phase"].x.squeeze().to(params.DEVICE)
+    @torch.no_grad()
+    def act(self, state: BaseData, act_random: bool = False) -> List[int]:
+        state = state.clone().to(params.DEVICE)
+        x_movement = state["movement"].x
+        edge_index_movement_to_phase = state["movement", "to", "phase"].edge_index
+        pressures = group_sum((x_movement[:, 0] - x_movement[:, 1])[edge_index_movement_to_phase[0]],
+                              group_index=edge_index_movement_to_phase[1])
         index = state["phase", "to", "intersection"].edge_index[1].to(params.DEVICE)
-        random_actions = GroupCategorical(logits=torch.zeros_like(x), index=index).sample(return_indices=False)
-        max_pressure_actions = group_argmax(x, index) if not act_random else random_actions
-        if self.initialized:
-            action_change = torch.logical_and(self.action_durations >= self.min_phase_steps,
-                                              self.actions != max_pressure_actions)
-            self.actions = action_change * max_pressure_actions + ~action_change * self.actions
-            self.action_durations = torch.zeros_like(self.actions) + ~action_change * (self.action_durations + 1)
+        if act_random:
+            actions = GroupCategorical(logits=torch.zeros_like(pressures), index=index).sample(return_indices=False)
         else:
-            self.actions = max_pressure_actions
-            self.action_durations = torch.zeros_like(self.actions)
-            self.initialized = True
-        return self.actions.cpu().numpy().tolist()
+            actions = group_argmax(pressures, index)
+        return actions.cpu().numpy().tolist()
 
+    @torch.no_grad()
     def fit(self, environment: MultiprocessingMarlEnvironment, steps: int = 1_000, skip_steps: int = 100,
-            checkpoint_path: str = None):
+            checkpoint_dir: str = None):
         _ = environment.reset()
         while environment.total_step < steps:
             while True:
@@ -94,6 +89,16 @@ class MaxPressure(Agent):
                     break
         environment.close()
 
+    @torch.no_grad()
+    def test(self, environment: MultiprocessingMarlEnvironment, checkpoint_path: str = None, stats_dir: str = None):
+        state = environment.reset()
+        while not environment.all_done():
+            actions = self.act(state)
+            state, _, done = environment.step(actions)
+            print(environment.info()["progress"])
+        environment.close()
+
+    @torch.no_grad()
     def demo(self, environment: MarlEnvironment, checkpoint_path: str = None):
         state = environment.reset()
         while True:
@@ -167,9 +172,9 @@ class DQN(Agent):
         _ = environment.reset()
         while environment.total_step <= steps + skip_steps:
             metadata = environment.metadata()
-            self.n_workers = metadata["n_workers"]
-            self.worker_agent_offsets = metadata["agent_offsets"]
-            self.worker_action_offsets = metadata["action_offsets"]
+            self.n_workers = metadata.n_workers
+            self.worker_agent_offsets = metadata.agent_offsets
+            self.worker_action_offsets = metadata.action_offsets
             states = environment.state()
             actions, _, actions_bool_index, _, _, _ = self.act(states.to(params.DEVICE), eps=self.eps)
 
@@ -386,13 +391,30 @@ class A2C(Agent):
         self.optimizer_a.episode_step()
 
     @torch.no_grad()
+    def test(self, environment: MultiprocessingMarlEnvironment, checkpoint_path: str = None, stats_dir: str = None):
+        if checkpoint_path is not None:
+            self.load_state_dict(torch.load(checkpoint_path, map_location=params.DEVICE))
+        df = None
+        state = environment.reset()
+        while not environment.all_done():
+            metadata = environment.metadata()
+            state = state.to(params.DEVICE)
+            actions, actions_index, probs_mean, probs_std, agent_index = self.act(state, greedy=True, mc_samples=100)
+
+        environment.close()
+
+    def _extract_stats_records(self, actions: torch.LongTensor, mc_means: torch.LongTensor, mc_stds: torch.LongTensor,
+                               metadata: MPMarlEnvMetaData):
+        pass
+
+    @torch.no_grad()
     def demo(self, environment: MarlEnvironment, checkpoint_path: str = None):
         if checkpoint_path is not None:
             self.load_state_dict(torch.load(checkpoint_path, map_location=params.DEVICE))
         state = environment.reset()
         while True:
             state = state.to(params.DEVICE)
-            actions = self.act(state, greedy=False, mc_samples=10)[0]
+            actions = self.act(state, greedy=True, mc_samples=10)[0]
             state, _, done = environment.step(actions)
             if done:
                 break

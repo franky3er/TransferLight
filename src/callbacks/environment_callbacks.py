@@ -1,5 +1,6 @@
-import os.path
 from abc import ABC, abstractmethod
+import ntpath
+import os.path
 from collections import defaultdict
 
 import libsumo as traci
@@ -34,6 +35,7 @@ class StatsCallback(EnvironmentCallback):
 
     def __init__(self, results_dir: str):
         super(StatsCallback, self).__init__()
+        self.results_file_extension = None
         self.results_dir = results_dir
         self.df = None
 
@@ -47,7 +49,7 @@ class StatsCallback(EnvironmentCallback):
 
     def _store_results(self, environment):
         if self.df is not None:
-            results_name = f"worker{environment.name}-episode{self.episode}.csv"
+            results_name = f"{ntpath.split(environment.scenario)[1].split('.')[0]}.{self.results_file_extension}"
             results_path = os.path.join(self.results_dir, results_name)
             os.makedirs(self.results_dir, exist_ok=True)
             self.df.to_csv(results_path, index=False)
@@ -55,6 +57,10 @@ class StatsCallback(EnvironmentCallback):
 
 
 class VehicleStatsCallback(StatsCallback):
+
+    def __init__(self, results_dir: str):
+        super(VehicleStatsCallback, self).__init__(results_dir)
+        self.results_file_extension = "vehicle.csv"
 
     def on_step_end(self, environment):
         vehicles = traci.vehicle.getIDList()
@@ -79,6 +85,10 @@ class VehicleStatsCallback(StatsCallback):
 
 
 class IntersectionStatsCallback(StatsCallback):
+
+    def __init__(self, results_dir: str):
+        super(IntersectionStatsCallback, self).__init__(results_dir)
+        self.results_file_extension = "intersection.csv"
 
     def on_step_end(self, environment):
         intersections = traci.trafficlight.getIDList()
