@@ -1,8 +1,6 @@
 from abc import ABC, abstractmethod
-from collections import namedtuple
 import itertools
 import math
-import ntpath
 import os
 import random
 import sys
@@ -29,10 +27,17 @@ class AgentMetadata(NamedTuple):
 
 
 class MarlEnvMetaData(NamedTuple):
+    name: str
     scenario_path: str
     scenario_name: str
+    episode: int
+    episode_step: int
+    total_step: int
+    episode_time: int
+    total_time: int
     n_agents: int
     n_actions: int
+    action_offsets: List[int]
     agents_metadata: List[AgentMetadata]
 
 
@@ -78,19 +83,21 @@ class Environment(ABC):
 
 class MarlEnvironment(Environment):
 
-    def __init__(self, name: str = None, scenario_path: str = None, scenarios_dir: str = None,
-                 max_patience: int = sys.maxsize, problem_formulation: str = None, use_default: bool = False,
-                 action_time: int = ACTION_TIME, yellow_change_time: int = YELLOW_CHANGE_TIME,
-                 all_red_time: int = ALL_RED_TIME, demo: bool = False, stats_dir: str = None):
+    def __init__(self, name: str = None, scenario_path: str = None, scenarios_dirs: Union[str, List[str]] = None,
+                 max_patience: int = sys.maxsize, max_steps: int = sys.maxsize, problem_formulation: str = None,
+                 use_default: bool = False, action_time: int = ACTION_TIME,
+                 yellow_change_time: int = YELLOW_CHANGE_TIME, all_red_time: int = ALL_RED_TIME,
+                 demo: bool = False, stats_dir: str = None):
         self.name = "1" if name is None else name
-        self.scenarios, self.scenarios_dir, self.scenario = None, None, None
-        self.setup_scenarios(scenario_path, scenarios_dir)
+        self.scenarios, self.scenario = None, None
+        self.setup_scenarios(scenario_path, scenarios_dirs)
         self.problem_formulation_name = problem_formulation
         self.problem_formulation = None
         self.net_xml_path = None
         self.net = None
         self.sumo = "sumo-gui" if demo else "sumo"
         self.max_patience = max_patience
+        self.max_steps = max_steps
         self.use_default = use_default
         self.episode = -1
         self.total_step, self.total_time, self.episode_step, self.episode_time = 0, 0, 0, 0
@@ -101,17 +108,18 @@ class MarlEnvironment(Environment):
             self.callbacks.append(VehicleStatsCallback(stats_dir))
             self.callbacks.append(IntersectionStatsCallback(stats_dir))
 
-    def setup_scenarios(self, scenario_path: str = None, scenarios_dir: str = None):
-        assert (scenario_path is not None) != (scenarios_dir is not None)
+    def setup_scenarios(self, scenario_path: str = None, scenarios_dirs: str = None):
+        assert (scenario_path is not None) != (scenarios_dirs is not None)
         if scenario_path is not None:
             assert scenario_path.endswith(".sumocfg")
             scenarios = [scenario_path]
-            self.scenarios_dir = os.path.dirname(scenario_path)
         else:
-            scenarios = [os.path.join(scenarios_dir, scenario) for scenario in os.listdir(scenarios_dir)
+            scenarios_dirs = [scenarios_dirs] if isinstance(scenarios_dirs, str) else scenarios_dirs
+            scenarios = [os.path.join(scenarios_dirs, scenario)
+                         for scenarios_dir in scenarios_dirs
+                         for scenario in os.listdir(scenarios_dir)
                          if os.path.isfile(os.path.join(scenarios_dir, scenario))
                          and scenario.endswith(".sumocfg")]
-            self.scenarios_dir = scenarios_dir
         self.scenarios = itertools.cycle(scenarios)
         self.scenario = None
 
@@ -121,7 +129,8 @@ class MarlEnvironment(Environment):
         self.episode_step = 0
         self.episode_time = 0
         self.scenario = next(self.scenarios)
-        net_xml_path = os.path.join(self.scenarios_dir,
+        scenario_dir = os.path.dirname(self.scenario)
+        net_xml_path = os.path.join(scenario_dir,
                                     ET.parse(self.scenario).getroot().find("input").find("net-file").attrib["value"])
         sumo_cmd = [self.sumo, "-c", self.scenario, "--time-to-teleport", str(-1), "--no-warnings"]
         traci.start(sumo_cmd)
@@ -158,9 +167,11 @@ class MarlEnvironment(Environment):
         self.rewards = rewards
         max_waiting_time = 0.0 if len(traci.vehicle.getIDList()) == 0 \
             else np.max([traci.vehicle.getWaitingTime(vehID=veh_id) for veh_id in traci.vehicle.getIDList()])
-        if max_waiting_time > self.max_patience:
+        max_patience_exceeded = max_waiting_time > self.max_patience
+        max_steps_exceeded = self.episode_step > self.max_steps
+        if max_patience_exceeded:
             print(f"Max patience exceeded: ({self.scenario})")
-        done = (True if traci.simulation.getMinExpectedNumber() == 0 or max_waiting_time > self.max_patience
+        done = (True if traci.simulation.getMinExpectedNumber() == 0 or max_patience_exceeded or max_steps_exceeded
                 else False)
         [callback.on_episode_end(self) for callback in self.callbacks if done]
         if return_info:
@@ -182,11 +193,19 @@ class MarlEnvironment(Environment):
             agents_metadata.append(agent_metadata)
 
         metadata = MarlEnvMetaData(
+            name=self.name,
             scenario_path=self.scenario,
-            scenario_name=ntpath.split(self.scenario)[1].split('.')[0],
+            scenario_name=os.path.join(*os.path.normpath(self.scenario).split(os.path.sep)[-2:]).split(".")[0],
+            episode=self.episode,
+            episode_step=self.episode_step,
+            total_step=self.total_step,
+            episode_time=self.episode_time,
+            total_time=self.total_time,
             n_agents=len(self.net.signalized_intersections),
             n_actions=sum([len(self.net.get_phases(intersection))
                            for intersection in self.net.signalized_intersections]),
+            action_offsets=np.cumsum([len(self.net.get_phases(intersection))
+                                      for intersection in self.net.signalized_intersections]).tolist(),
             agents_metadata=agents_metadata
         )
         return metadata
@@ -201,20 +220,22 @@ class MarlEnvironment(Environment):
         return info
 
     def _apply_actions(self, actions: List[int]):
+        [callback.on_action_step_start(self) for callback in self.callbacks]
         if self.use_default:
             self._apply_default_actions()
         else:
             self._apply_controlled_actions(actions)
         self.episode_step += 1
         self.total_step += 1
+        [callback.on_action_step_end(self) for callback in self.callbacks]
 
     def _apply_default_actions(self):
         for _ in range(self.action_time):
-            [callback.on_step_start(self) for callback in self.callbacks]
+            [callback.on_time_step_start(self) for callback in self.callbacks]
             traci.simulationStep()
             self.episode_time += 1
             self.total_time += 1
-            [callback.on_step_end(self) for callback in self.callbacks]
+            [callback.on_time_step_end(self) for callback in self.callbacks]
 
     def _apply_controlled_actions(self, actions: List[int]):
         actions = [actions] if isinstance(actions, int) else actions
@@ -226,13 +247,13 @@ class MarlEnvironment(Environment):
                              for current_phase, next_phase in zip(current_phases, next_phases)]
         green_states = [next_phase[1] for next_phase in next_phases]
         for t in range(self.action_time):
-            [callback.on_step_start(self) for callback in self.callbacks]
+            [callback.on_time_step_start(self) for callback in self.callbacks]
             for signalized_intersection, transition_state_ in zip(signalized_intersections, transition_states):
                 traci.trafficlight.setRedYellowGreenState(signalized_intersection, transition_state_[t])
             traci.simulationStep()
             self.episode_time += 1
             self.total_time += 1
-            [callback.on_step_end(self) for callback in self.callbacks]
+            [callback.on_time_step_end(self) for callback in self.callbacks]
         for signalized_intersection, green_state in zip(signalized_intersections, green_states):
             traci.trafficlight.setRedYellowGreenState(signalized_intersection, green_state)
 
@@ -258,17 +279,18 @@ class MarlEnvironment(Environment):
 
 class MultiprocessingMarlEnvironment(Environment):
 
-    def __init__(self, scenario_path: str = None, scenarios_dir: str = None, cycle_scenarios: bool = True,
-                 max_patience: int = sys.maxsize, problem_formulation: str = None, n_workers: int = 1,
-                 use_default: bool = False, action_time: int = ACTION_TIME,
+    def __init__(self, scenario_path: str = None, scenarios_dirs: str = None, cycle_scenarios: bool = True,
+                 max_patience: int = sys.maxsize, max_steps: int = sys.maxsize, problem_formulation: str = None,
+                 n_workers: int = 1, use_default: bool = False, action_time: int = ACTION_TIME,
                  yellow_change_time: int = YELLOW_CHANGE_TIME, all_red_time: int = ALL_RED_TIME,
                  stats_dir: str = None):
         self.n_workers = n_workers
-        self.scenarios, self.scenarios_dir, self.scenario, self.n_scenarios = None, None, None, None
+        self.scenarios, self.scenario, self.n_scenarios = None, None, None
         self.cycle_scenarios = cycle_scenarios
-        self.setup_scenarios(scenario_path, scenarios_dir)
+        self.setup_scenarios(scenario_path, scenarios_dirs)
         self.problem_formulation_name = problem_formulation
         self.max_patience = max_patience
+        self.max_steps = max_steps
         self.use_default = use_default
         self.demo = False
         self.stats_dir = stats_dir
@@ -288,17 +310,19 @@ class MultiprocessingMarlEnvironment(Environment):
         self.episode_step = [0 for _ in range(self.n_workers)]
         self.total_step = 0
 
-    def setup_scenarios(self, scenario_path: str = None, scenarios_dir: str = None):
-        assert (scenario_path is not None) != (scenarios_dir is not None)
+    def setup_scenarios(self, scenario_path: str = None, scenarios_dirs: Union[str, List[str]] = None):
+        assert (scenario_path is not None) != (scenarios_dirs is not None)
         if scenario_path is not None:
             assert scenario_path.endswith(".sumocfg")
             scenarios = [scenario_path]
-            self.scenarios_dir = os.path.dirname(scenario_path)
         else:
-            scenarios = [os.path.join(scenarios_dir, scenario) for scenario in os.listdir(scenarios_dir)
+            scenarios_dirs = [scenarios_dirs] if isinstance(scenarios_dirs, str) else scenarios_dirs
+            scenarios = [os.path.join(scenarios_dir, scenario)
+                         for scenarios_dir in scenarios_dirs
+                         for scenario in os.listdir(scenarios_dir)
                          if os.path.isfile(os.path.join(scenarios_dir, scenario))
                          and scenario.endswith(".sumocfg")]
-            self.scenarios_dir = scenarios_dir
+            print(f"found {len(scenarios)} scenarios")
         if self.scenarios is None:
             self.scenarios = mp.Queue()
         else:
@@ -314,12 +338,12 @@ class MultiprocessingMarlEnvironment(Environment):
 
     def _get_work_args(self, rank: int):
         return (rank, self.pipes[rank][1], self.scenarios, self.cycle_scenarios, self.problem_formulation_name,
-                self.max_patience, self.use_default, self.action_time, self.yellow_change_time, self.all_red_time,
-                self.stats_dir)
+                self.max_patience, self.max_steps, self.use_default, self.action_time, self.yellow_change_time,
+                self.all_red_time, self.stats_dir)
 
     @staticmethod
-    def work(rank, worker_end, scenarios, cycle_scenarios, problem_formulation, max_patience, use_default, action_time,
-             yellow_change_time, all_red_time, stats_dir):
+    def work(rank, worker_end, scenarios, cycle_scenarios, problem_formulation, max_patience, max_steps, use_default,
+             action_time, yellow_change_time, all_red_time, stats_dir):
         print(f"Worker {rank} started")
         env = None
         while True:
@@ -335,9 +359,10 @@ class MultiprocessingMarlEnvironment(Environment):
                 print(f"Worker {rank} reset: {scenario}")
                 if env is None:
                     env = MarlEnvironment(name=rank, scenario_path=scenario, max_patience=max_patience,
-                                          problem_formulation=problem_formulation, use_default=use_default,
-                                          action_time=action_time, yellow_change_time=yellow_change_time,
-                                          all_red_time=all_red_time, stats_dir=stats_dir)
+                                          max_steps=max_steps, problem_formulation=problem_formulation,
+                                          use_default=use_default, action_time=action_time,
+                                          yellow_change_time=yellow_change_time, all_red_time=all_red_time,
+                                          stats_dir=stats_dir)
                 else:
                     env.setup_scenarios(scenario_path=scenario)
                 worker_end.send(env.reset(**kwargs))
@@ -457,7 +482,9 @@ class MultiprocessingMarlEnvironment(Environment):
         info["episode_step"] = self.episode_step
         info["total_step"] = self.total_step
         info["ema_reward"] = self.ema_reward
-        info["progress"] = (f'--- Episode: {np.min(self.episode)}  '
+        episode = np.min([self.episode[rank] for rank in range(self.n_workers)
+                          if not self.worker_done[rank]]) if not self.all_done() else None
+        info["progress"] = (f'--- Episode: {episode}  '
                             f'Total Step: {info["total_step"]}  EMA Reward: {info["ema_reward"]} ---')
         return info
 

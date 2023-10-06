@@ -1,9 +1,11 @@
 from abc import abstractmethod
+from collections import defaultdict
 import os.path
-import pathlib
+from pathlib import Path
 import sys
 from typing import Any, List, Dict, Tuple
 
+import pandas as pd
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -15,12 +17,16 @@ from torch_geometric.utils import softmax
 from src.data.replay_buffer import ReplayBuffer
 from src.modules.distributions import GroupCategorical
 from src.modules.networks import Network
-from src.modules.utils import group_argmax, group_sum
+from src.modules.utils import group_argmax
 from src import params
-from src.rl.environments import MarlEnvironment, MultiprocessingMarlEnvironment, MPMarlEnvMetaData
+from src.rl.environments import MarlEnvironment, MultiprocessingMarlEnvironment, MPMarlEnvMetaData, MarlEnvMetaData
 
 
 class Agent(nn.Module):
+
+    def __init__(self):
+        super(Agent, self).__init__()
+        self.stats = defaultdict(lambda: pd.DataFrame())
 
     @classmethod
     def create(cls, class_name: str, init_args: Dict):
@@ -53,16 +59,143 @@ class Agent(nn.Module):
             if module.bias is not None:
                 module.bias.data.fill_(0.1)
 
+    def _update_stats(self, actions: List[int], mc_means: List[float], mc_stds: List[float],
+                      metadata: MPMarlEnvMetaData):
+        agent_offsets = [0] + metadata.agent_offsets
+        action_offsets = [0] + metadata.action_offsets
+        for rank in range(metadata.n_workers):
+            worker_mc_means, worker_mc_stds = None, None
+            worker_actions = actions[agent_offsets[rank]:agent_offsets[rank + 1]]
+            if mc_means is not None:
+                worker_mc_means = mc_means[action_offsets[rank]:action_offsets[rank + 1]]
+            if mc_stds is not None:
+                worker_mc_stds = mc_stds[action_offsets[rank]:action_offsets[rank + 1]]
+            worker_metadata = metadata.workers_metadata[rank]
+            self._update_worker_stats(worker_actions, worker_mc_means, worker_mc_stds, worker_metadata)
+
+    def _update_worker_stats(self, actions: List[int], mc_means: List[float], mc_stds: List[float],
+                             metadata: MarlEnvMetaData):
+        records = defaultdict(lambda: [])
+        action_offsets = [0] + metadata.action_offsets
+        for rank in range(metadata.n_agents):
+            records["scenario"].append(metadata.scenario_name)
+            records["episode"].append(metadata.episode)
+            records["episode_step"].append(metadata.episode_step)
+            records["total_step"].append(metadata.total_step)
+            records["episode_time"].append(metadata.episode_time)
+            records["total_time"].append(metadata.total_time)
+            records["agent_name"].append(metadata.agents_metadata[rank].name)
+            records["agent_action"].append(actions[rank])
+            records["agent_n_actions"].append(metadata.agents_metadata[rank].n_actions)
+            records["agent_action_names"].append("|".join(metadata.agents_metadata[rank].action_names))
+            agent_mc_means = None
+            if mc_means is not None:
+                agent_mc_means = mc_means[action_offsets[rank]:action_offsets[rank + 1]]
+                agent_mc_means = "|".join([str(mean) for mean in agent_mc_means])
+            records["agent_mc_means"].append(agent_mc_means)
+            agent_mc_stds = None
+            if mc_stds is not None:
+                agent_mc_stds = mc_stds[action_offsets[rank]:action_offsets[rank + 1]]
+                agent_mc_stds = "|".join([str(std) for std in agent_mc_stds])
+            records["agent_mc_stds"].append(agent_mc_stds)
+        self.stats[metadata.scenario_name] = pd.concat([self.stats[metadata.scenario_name], pd.DataFrame(records)])
+
+    def _store_stats(self, stats_dir: str):
+        for scenario, records in self.stats.items():
+            stats_path = os.path.join(stats_dir, f"{scenario}.agent.csv")
+            os.makedirs(str(Path(stats_path).parent), exist_ok=True)
+            records.to_csv(stats_path, index=False)
+
+
+class DefaultAgent(Agent):
+
+    def act(self, state: Any) -> List[int]:
+        return []
+
+    @torch.no_grad()
+    def fit(self, environment: MultiprocessingMarlEnvironment, steps: int = 1_000, skip_steps: int = 100,
+            checkpoint_path: str = None):
+        _ = environment.reset()
+        while environment.total_step < steps:
+            while True:
+                state = environment.state()
+                actions = self.act(state)
+                _, _, done = environment.step(actions)
+                info = environment.info()
+                if environment.total_step >= skip_steps:
+                    print(info["progress"])
+                if done:
+                    break
+
+    @torch.no_grad()
+    def test(self, environment: MultiprocessingMarlEnvironment, checkpoint_path: str = None, stats_dir: str = None):
+        state = environment.reset()
+        while not environment.all_done():
+            actions = self.act(state)
+            state, _, done = environment.step(actions)
+            print(environment.info()["progress"])
+        environment.close()
+
+    @torch.no_grad()
+    def demo(self, environment: MarlEnvironment, checkpoint_path: str = None):
+        state = environment.reset()
+        while True:
+            actions = self.act(state)
+            state, _, done = environment.step(actions)
+            if done:
+                break
+        environment.close()
+
+
+class RandomAgent(Agent):
+
+    def act(self, state: BaseData) -> List[int]:
+        index = state["phase", "to", "intersection"].edge_index[1].to(params.DEVICE)
+        logits = torch.zeros_like(state["phase"].x.to(params.DEVICE)).squeeze()
+        actions = GroupCategorical(logits=logits, index=index).sample(return_indices=False)
+        return actions.cpu().numpy().tolist()
+
+    @torch.no_grad()
+    def fit(self, environment: MultiprocessingMarlEnvironment, steps: int = 1_000, skip_steps: int = 100,
+            checkpoint_path: str = None):
+        _ = environment.reset()
+        while environment.total_step < steps:
+            while True:
+                state = environment.state()
+                actions = self.act(state)
+                _, _, done = environment.step(actions)
+                info = environment.info()
+                if environment.total_step >= skip_steps:
+                    print(info["progress"])
+                if done:
+                    break
+
+    @torch.no_grad()
+    def test(self, environment: MultiprocessingMarlEnvironment, checkpoint_path: str = None, stats_dir: str = None):
+        state = environment.reset()
+        while not environment.all_done():
+            actions = self.act(state)
+            state, _, done = environment.step(actions)
+            print(environment.info()["progress"])
+        environment.close()
+
+    @torch.no_grad()
+    def demo(self, environment: MarlEnvironment, checkpoint_path: str = None):
+        state = environment.reset()
+        while True:
+            actions = self.act(state)
+            state, _, done = environment.step(actions)
+            if done:
+                break
+        environment.close()
+
 
 class MaxPressure(Agent):
 
     @torch.no_grad()
     def act(self, state: BaseData, act_random: bool = False) -> List[int]:
         state = state.clone().to(params.DEVICE)
-        x_movement = state["movement"].x
-        edge_index_movement_to_phase = state["movement", "to", "phase"].edge_index
-        pressures = group_sum((x_movement[:, 0] - x_movement[:, 1])[edge_index_movement_to_phase[0]],
-                              group_index=edge_index_movement_to_phase[1])
+        pressures = state["phase"].x
         index = state["phase", "to", "intersection"].edge_index[1].to(params.DEVICE)
         if act_random:
             actions = GroupCategorical(logits=torch.zeros_like(pressures), index=index).sample(return_indices=False)
@@ -83,9 +216,6 @@ class MaxPressure(Agent):
                 if environment.total_step >= skip_steps:
                     print(info["progress"])
                 if done:
-                    self.phases = []
-                    self.action_durations = []
-                    self.initialized = False
                     break
         environment.close()
 
@@ -93,10 +223,13 @@ class MaxPressure(Agent):
     def test(self, environment: MultiprocessingMarlEnvironment, checkpoint_path: str = None, stats_dir: str = None):
         state = environment.reset()
         while not environment.all_done():
+            metadata = environment.metadata()
             actions = self.act(state)
             state, _, done = environment.step(actions)
+            self._update_stats(actions, None, None, metadata)
             print(environment.info()["progress"])
         environment.close()
+        self._store_stats(stats_dir)
 
     @torch.no_grad()
     def demo(self, environment: MarlEnvironment, checkpoint_path: str = None):
@@ -167,7 +300,7 @@ class DQN(Agent):
     def fit(self, environment: MultiprocessingMarlEnvironment, steps: int = 1_000, skip_steps: int = 100,
             checkpoint_dir: str = None):
         self.train()
-        pathlib.Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+        Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
         highest_ema_reward = - sys.float_info.max
         _ = environment.reset()
         while environment.total_step <= steps + skip_steps:
@@ -244,6 +377,23 @@ class DQN(Agent):
         # Polyak averaging to update the parameters of the target network
         for target_param, local_param in zip(self.target_q_network.parameters(), self.online_q_network.parameters()):
             target_param.data.copy_(self.tau * local_param.data + (1.0 - self.tau) * target_param.data)
+
+    @torch.no_grad()
+    def test(self, environment: MultiprocessingMarlEnvironment, checkpoint_path: str = None, stats_dir: str = None):
+        if checkpoint_path is not None:
+            self.load_state_dict(torch.load(checkpoint_path, map_location=params.DEVICE))
+        _ = environment.reset()
+        while not environment.all_done():
+            metadata = environment.metadata()
+            state = environment.state().to(params.DEVICE)
+            actions, _, _, action_value_means, action_value_stds, _ = self.act(state, mc_samples=100)
+            _ = environment.step(actions)
+            action_value_means = action_value_means.cpu().numpy().tolist()
+            action_value_stds = action_value_stds.cpu().numpy().tolist()
+            self._update_stats(actions, action_value_means, action_value_stds, metadata)
+            print(environment.info()["progress"])
+        environment.close()
+        self._store_stats(stats_dir)
 
     @torch.no_grad()
     def demo(self, environment: MarlEnvironment, checkpoint_path: str = None):
@@ -324,7 +474,7 @@ class A2C(Agent):
     def fit(self, environment: MultiprocessingMarlEnvironment, steps: int = 1_000, skip_steps: int = 100,
             checkpoint_dir: str = None):
         self.train()
-        pathlib.Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+        Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
         _ = environment.reset()
         highest_ema_reward = - sys.float_info.max
         while environment.total_step <= steps + skip_steps:
@@ -387,25 +537,25 @@ class A2C(Agent):
                                        self.gradient_clipping_max_norm)
         torch.nn.utils.clip_grad_norm_(list(self.network_c.parameters()) + list(self.critic_head.parameters()),
                                        self.gradient_clipping_max_norm)
-        self.optimizer_c.episode_step()
-        self.optimizer_a.episode_step()
+        self.optimizer_c.episode_time()
+        self.optimizer_a.episode_time()
 
     @torch.no_grad()
     def test(self, environment: MultiprocessingMarlEnvironment, checkpoint_path: str = None, stats_dir: str = None):
         if checkpoint_path is not None:
             self.load_state_dict(torch.load(checkpoint_path, map_location=params.DEVICE))
-        df = None
         state = environment.reset()
         while not environment.all_done():
             metadata = environment.metadata()
-            state = state.to(params.DEVICE)
-            actions, actions_index, probs_mean, probs_std, agent_index = self.act(state, greedy=True, mc_samples=100)
-
+            state = environment.state().to(params.DEVICE)
+            actions, _, probs_mean, probs_std, _ = self.act(state, greedy=True, mc_samples=100)
+            _ = environment.step(actions)
+            probs_mean = probs_mean.cpu().numpy().tolist()
+            probs_std = probs_std.cpu().numpy().tolist()
+            self._update_stats(actions, probs_mean, probs_std, metadata)
+            print(environment.info()["progress"])
         environment.close()
-
-    def _extract_stats_records(self, actions: torch.LongTensor, mc_means: torch.LongTensor, mc_stds: torch.LongTensor,
-                               metadata: MPMarlEnvMetaData):
-        pass
+        self._store_stats(stats_dir)
 
     @torch.no_grad()
     def demo(self, environment: MarlEnvironment, checkpoint_path: str = None):

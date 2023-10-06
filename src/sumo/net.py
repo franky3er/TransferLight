@@ -46,6 +46,18 @@ class TrafficNet(net.Net):
         self.index[("movement", "to_up", "lane")] = [(movement, movement[0]) for movement in self.movements]
         self.index[("lane", "to_up", "movement")] = [(movement[2], movement) for movement in self.movements]
         self.index[("movement", "to_down", "lane")] = [(movement, movement[2]) for movement in self.movements]
+        self.index[("lane", "to_down", "intersection")] = [
+            (lane.getID(), intersection)
+            for intersection in self.signalized_intersections
+            for edge in self.getNode(intersection).getIncoming()
+            for lane in self.getEdge(edge.getID()).getLanes()
+        ]
+        self.index[("lane", "to_up", "intersection")] = [
+            (lane.getID(), intersection)
+            for intersection in self.signalized_intersections
+            for edge in self.getNode(intersection).getOutgoing()
+            for lane in self.getEdge(edge.getID()).getLanes()
+        ]
         self.index[("movement", "to", "phase")] = [(movement, phase)
                                                    for phase in self.phases
                                                    for movement in self.get_movement_signals(phase).keys()]
@@ -108,6 +120,16 @@ class TrafficNet(net.Net):
         self.index[("segment", "to_up", "movement")] = [(segment, movement)
                                                         for movement in self.movements
                                                         for segment in self.get_segments(movement[2])]
+        self.index[("segment", "to_down", "intersection")] = [
+            (segment, intersection)
+            for lane, intersection in self.index[("lane", "to_down", "intersection")]
+            for segment in self.get_segments(lane)
+        ]
+        self.index[("segment", "to_up", "intersection")] = [
+            (segment, intersection)
+            for lane, intersection in self.index[("lane", "to_up", "intersection")]
+            for segment in self.get_segments(lane)
+        ]
 
         self.pos["segment"] = [segment[1] for segment in self.segments]
 
@@ -184,10 +206,6 @@ class TrafficNet(net.Net):
                             for out_lane in self.getLane(con[0][1]).getEdge().getLanes()
                             if not exclude_prohibited or (exclude_prohibited and signal != "r")}
         return movement_signals
-        #return {(movement[0], movement[1], out_lane.getID()): signal
-        #        for movement, signal in zip(movements, signals)
-        #        for out_lane in self.getLane(movement[2]).getEdge().getLanes()
-        #        if signal in ["g", "G"]}
 
     def get_current_movement_signals(self, intersection: str) -> Dict[str, str]:
         current_phase = self.get_current_phase(intersection)

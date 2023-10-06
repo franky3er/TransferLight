@@ -2,10 +2,12 @@ from collections import defaultdict
 import sys
 from typing import Dict, List
 
+import torch
 from torch import nn
 from torch_geometric.data import HeteroData
 
 from src.rl.problem_formulations import TransferLightProblemFormulation
+from src.modules.base_modules import ResidualStack
 from src.modules.message_passing import HeteroMessagePassing
 from src.modules.utils import group_mean
 
@@ -17,6 +19,76 @@ class Network(nn.Module):
         obj = getattr(sys.modules[__name__], class_name)(**init_args)
         assert isinstance(obj, Network)
         return obj
+
+
+class PressLightNetwork(Network):
+
+    def __init__(self, network_type: str, state_dim: int, hidden_dim: int, n_actions: int, n_layers: int,
+                 dropout_prob: float = 0.1):
+        super(PressLightNetwork, self).__init__()
+        self.embed = ResidualStack(input_dim=state_dim, output_dim=hidden_dim, stack_size=n_layers,
+                                   dropout_prob=dropout_prob)
+        if network_type == "DQN":
+            self.head = PressLightQHead(input_dim=hidden_dim, hidden_dim=hidden_dim, n_actions=n_actions)
+        elif network_type == "A2C":
+            self.head = PressLightActorCriticHead(input_dim=hidden_dim, hidden_dim=hidden_dim, n_actions=n_actions)
+        else:
+            raise Exception(f'network_type "{network_type}" not implemented')
+
+    def forward(self, state: HeteroData):
+        state = state.clone()
+        state = state["intersection"].x
+        embedded_state = self.embed(state)
+        return self.head(embedded_state)
+
+
+class PressLightQHead(nn.Module):
+
+    def __init__(self, input_dim: int, hidden_dim: int, n_actions: int):
+        super(PressLightQHead, self).__init__()
+        self.state_value_fct = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, 1))
+        self.action_advantage_fct = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, n_actions))
+
+    def forward(self, embedded_state: torch.Tensor):
+        device = embedded_state.get_device()
+        device = "cpu" if device == -1 else device
+        state_value = self.state_value_fct(embedded_state)
+        action_advantages = self.action_advantage_fct(embedded_state)
+        action_advantages = action_advantages - torch.mean(action_advantages, dim=1, keepdim=True)
+        action_values = state_value + action_advantages
+        action_index = (torch.arange(action_values.size(0), device=device).unsqueeze(-1)
+                        .repeat((1, action_values.size(1))).view(-1))
+        action_values = action_values.view(-1)
+        return action_values, action_index
+
+
+class PressLightActorCriticHead(nn.Module):
+
+    def __init__(self, input_dim: int, hidden_dim: int, n_actions: int):
+        super(PressLightActorCriticHead, self).__init__()
+        self.critic_fct = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, 1))
+        self.actor_fct = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, n_actions))
+
+    def forward(self, embedded_state: torch.Tensor):
+        device = embedded_state.get_device()
+        device = "cpu" if device == -1 else device
+        state_value = self.critic_fct(embedded_state)
+        action_logits = self.actor_fct(embedded_state)
+        action_index = (torch.arange(action_logits.size(0), device=device).unsqueeze(-1)
+                        .repeat((1, action_logits.size(1))).view(-1))
+        return state_value.squeeze(), action_logits.view(-1), action_index
 
 
 class TransferLightNetwork(Network):
@@ -60,9 +132,7 @@ class TransferLightGraphEmbedding(nn.Module):
         update_fct = {"class_name": "StandardUpdate",
                       "init_args": {"dropout_prob": dropout_prob}}
         updates = [
-            #[("segment", "to", "segment")],
-            #[("segment", "to_down", "movement"), ("segment", "to_up", "movement")],
-            #[("movement", "to", "movement")],
+            [("segment", "to_down", "movement"), ("segment", "to_up", "movement")],
             [("movement", "to", "phase")],
             [("phase", "to", "phase")],
             [("phase", "to", "intersection")]

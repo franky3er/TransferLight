@@ -2,30 +2,24 @@ import argparse
 import ntpath
 import os
 import subprocess
+import time
 
 from src import params
-from src.params import (agent_specs, TrainScenariosDirs, TestScenarioDirs, EnvironmentConfig, PROJECT_ROOT, TRAIN_STEPS,
-                        TRAIN_SKIP_STEPS, ScenarioNames, scenario_specs, SCRIPTS_ROOT)
+from src.params import (agent_specs, EnvironmentConfig, PROJECT_ROOT, TRAIN_STEPS,
+                        TRAIN_SKIP_STEPS, ScenarioNames, scenario_specs, TRAIN_SCENARIOS_ROOT)
 from src.rl.environments import Environment
-from src.rl.agents import Agent
+from src.rl.agents import Agent, DefaultAgent
+from src.sumo.scenarios import ScenariosGenerator
 
 
 trainable_agent_specs = {agent_name: agent_spec for agent_name, agent_spec in agent_specs.items()
-                         if agent_spec.train_scenarios_dir is not None}
-
-
-def absolute_file_paths(dir: str):
-    file_paths = []
-    for dir_path, _, file_names in os.walk(dir):
-        for file_name in file_names:
-            file_paths += os.path.abspath(os.path.join(dir_path, file_name))
-    return file_paths
+                         if agent_spec.scenario_name is not None}
 
 
 def setup_handler(args):
-    cmd = f"python {os.path.join(SCRIPTS_ROOT, 'setup.py')}"
-    process = subprocess.Popen(cmd, shell=True)
-    process.wait()
+    for scenario_spec in scenario_specs.values():
+        generator = ScenariosGenerator.create(scenario_spec)
+        generator.generate_scenarios()
 
 
 def train_handler(args):
@@ -39,8 +33,9 @@ def train_handler(args):
         checkpoint_dir = os.path.join(results_dir, "checkpoints")
         environment = Environment.create(EnvironmentConfig.MP_MARL["class_name"],
                                          dict(EnvironmentConfig.MP_MARL["init_args"],
-                                              scenarios_dir=agent_spec.train_scenarios_dir,
-                                              problem_formulation=agent_spec.problem_formulation))
+                                              scenarios_dirs=scenario_specs[agent_spec.scenario_name].train_dir,
+                                              problem_formulation=agent_spec.problem_formulation,
+                                              use_default=agent_spec.is_default))
         agent = Agent.create(agent_spec.agent_config["class_name"], agent_spec.agent_config["init_args"])
         agent.fit(environment, steps=TRAIN_STEPS, skip_steps=TRAIN_SKIP_STEPS, checkpoint_dir=checkpoint_dir)
     else:
@@ -57,52 +52,65 @@ def train_handler(args):
 def test_handler(args):
     device = args.device
     params.DEVICE = device
-    single_agent = len(args.agent) == 1 and args.agent[0] != "ALL"
-    single_checkpoint = len(args.checkpoint) == 1 and args.checkpoint[0] != "ALL"
-    single_scenario = len(args.scenario) == 1 and args.scenario[0] != "ALL"
-    if single_agent and single_checkpoint and single_scenario:
+    single_agent = len(args.agent) == 1 and "ALL" not in args.agent
+    single_checkpoint = len(args.checkpoint) == 1 and "ALL" not in args.checkpoint
+    if single_agent and single_checkpoint and "ALL" not in args.scenario and "AGENT" not in args.scenario:
         agent = args.agent[0]
         checkpoint_path = args.checkpoint[0]
-        scenario = args.scenario[0]
         agent_spec = agent_specs[agent]
         agent_config = agent_spec.agent_config
-        scenario_spec = scenario_specs[scenario]
+        scenarios_dirs = [scenario_specs[scenario].test_dir for scenario in args.scenario]
+
         env_config = EnvironmentConfig.MP_MARL
-        agent = Agent.create(agent_config["class_name"], agent_config["init_args"])
-        stats_dir = os.path.join(agent_spec.agent_dir, "test", scenario_spec.name,
+        stats_dir = os.path.join(agent_spec.agent_dir, "test",
                                  "best" if checkpoint_path is None else ntpath.split(checkpoint_path)[1].split(".")[0])
         environment = Environment.create(env_config["class_name"],
                                          dict(env_config["init_args"],
-                                              scenarios_dir=scenario_spec.test_dir,
+                                              scenarios_dirs=scenarios_dirs,
                                               problem_formulation=agent_spec.problem_formulation,
-                                              stats_dir=stats_dir, cycle_scenarios=False))
+                                              stats_dir=stats_dir, cycle_scenarios=False,
+                                              use_default=agent_spec.is_default))
+        agent = Agent.create(agent_config["class_name"], agent_config["init_args"])
         agent.test(environment, checkpoint_path=checkpoint_path, stats_dir=stats_dir)
         exit(0)
 
     test_cases = []
-    agents = args.agent
+    if "ALL" in args.agent:
+        agents = list(agent_specs.keys())
+    elif "TRAINABLE" in args.agent:
+        agents = list(trainable_agent_specs.keys())
+    else:
+        agents = args.agent
+
     for agent in agents:
         agent_spec = agent_specs[agent]
 
-        if "AGENT" in args.checkpoint:
-            scenarios_dirs = [agent_spec.test_scenarios_dir]
-        elif "ALL" in args.checkpoint:
-            scenarios_dirs = [scenario.value for scenario in TestScenarioDirs]
+        if "AGENT" in args.scenario:
+            scenarios = [agent_spec.scenario_name]
+            if scenarios[0] is None:
+                print(f"No scenario for agent {agent} specified")
+                continue
+        elif "ALL" in args.scenario:
+            scenarios = list(scenario_specs.keys())
         else:
-            scenarios_dirs = args.checkpoint
+            scenarios = args.scenario
 
         if "BEST" in args.checkpoint:
             checkpoint_paths = [os.path.join(agent_spec.agent_dir, "checkpoints", "best.pt")]
+            if os.path.exists(checkpoint_paths[0]):
+                print(f"No best checkpoint for agent {agent} specified")
+                continue
         elif "ALL" in args.checkpoint:
-            checkpoint_paths = absolute_file_paths(os.path.join(agent_spec.agent_dir, "checkpoints"))
+            checkpoint_dir = os.path.join(agent_spec.agent_dir, "checkpoints")
+            checkpoint_paths = [os.path.join(checkpoint_dir, file) for file in os.listdir(checkpoint_dir)]
         else:
             checkpoint_paths = args.checkpoint
 
-        test_cases += [(agent, scenarios_dir, checkpoint_path)
-                       for scenarios_dir in scenarios_dirs for checkpoint_path in checkpoint_paths]
+        test_cases += [(agent, scenarios, checkpoint_path) for checkpoint_path in checkpoint_paths]
 
-    for agent, scenarios_dir, checkpoint_path in test_cases:
-        cmd = (f"python {os.path.join(PROJECT_ROOT, 'main.py')} test -a {agent} -s {scenarios_dir} -c {checkpoint_path}"
+    for agent, scenarios, checkpoint_path in test_cases:
+        scenarios = " ".join(scenarios)
+        cmd = (f"python {os.path.join(PROJECT_ROOT, 'main.py')} test -a {agent} -s {scenarios} -c {checkpoint_path}"
                f" -d {device}")
         process = subprocess.Popen(cmd, shell=True)
         process.wait()
@@ -117,9 +125,10 @@ def demo_handler(args):
     params.DEVICE = args.device
     env_config = EnvironmentConfig.MARL_DEMO
     agent = Agent.create(agent_config["class_name"], agent_config["init_args"])
+    use_default = DefaultAgent is agent.__class__
     environment = Environment.create(env_config["class_name"],
                                      dict(env_config["init_args"],
-                                          scenario_path=scenario_path,
+                                          scenario_path=scenario_path, use_default=use_default,
                                           problem_formulation=agent_spec.problem_formulation))
     agent.demo(environment, checkpoint_path=checkpoint_path)
 
@@ -134,8 +143,6 @@ def list_handler(args):
             print("\n".join(trainable_agent_specs.keys()))
     elif args.scenario:
         raise NotImplementedError("Functionality not implemented yet")
-
-
 
 
 parser = argparse.ArgumentParser(
@@ -156,14 +163,14 @@ train_parser.add_argument("-d", "--device", help="device name (cpu/cuda)", defau
 train_parser.set_defaults(func=train_handler)
 
 test_parser = subparsers.add_parser("test", help="test agent(s) on scenario(s)")
-test_parser.add_argument("-a", "--agent", choices=list(agent_specs.keys()) + ["ALL"], nargs="+",
+test_parser.add_argument("-a", "--agent", choices=list(agent_specs.keys()) + ["ALL", "TRAINABLE"], nargs="+",
                          help="agent(s) to be tested ('ALL' is default and tests all available agents, "
                               "'TransferLight' selects all TransferLight agents)",
                          default=["ALL"])
 test_parser.add_argument("-c", "--checkpoint", required=False, nargs="*", default=["BEST"],
                          help="checkpoint(s) to test if available ('BEST' is default and selects the best checkpoint, "
                               "'ALL' selects all available checkpoints)")
-test_parser.add_argument("-s", "--scenario", required=False, nargs="+", default="ALL",
+test_parser.add_argument("-s", "--scenario", required=False, nargs="+", default=["ALL"],
                          choices=[s.value for s in ScenarioNames] + ["ALL"] + ["AGENT"],
                          help="scenario(s) to test agent on ('ALL' is default and selects all available scenarios, "
                               "'AGENT' selects the test scenarios specified for each individual agent)")

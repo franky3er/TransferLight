@@ -23,7 +23,6 @@ class ProblemFormulation(ABC):
         return getattr(sys.modules[__name__], class_name)(net)
 
     def __init__(self, net: TrafficNet):
-        # Node Types
         self.net = net
 
     @abstractmethod
@@ -39,6 +38,21 @@ class ProblemFormulation(ABC):
         pass
 
 
+class DummyProblemFormulation(ProblemFormulation):
+
+    def get_state(self) -> HeteroData:
+        data = HeteroData()
+        data["phase"].x = torch.zeros(len(self.net.phases), 1)
+        data["intersection"].x = torch.zeros(len(self.net.signalized_intersections), 1)
+        data["phase", "to", "intersection"].edge_index = to_edge_index(
+            self.net.index[("phase", "to", "intersection")], self.net.phases, self.net.signalized_intersections)
+        return data
+
+    def get_rewards(self) -> torch.Tensor:
+        return - torch.tensor([self.net.get_pressure(intersection=intersection, method="density")
+                               for intersection in self.net.signalized_intersections], dtype=torch.float32)
+
+
 class MaxPressureProblemFormulation(ProblemFormulation):
 
     @classmethod
@@ -46,7 +60,6 @@ class MaxPressureProblemFormulation(ProblemFormulation):
         metadata = dict()
 
         node_dim = defaultdict(lambda: 0)
-        node_dim["movement"] = 2
         node_dim["phase"] = 1
         node_dim["intersection"] = 1
         metadata["node_dim"] = node_dim
@@ -57,43 +70,54 @@ class MaxPressureProblemFormulation(ProblemFormulation):
 
     def get_state(self) -> HeteroData:
         data = HeteroData()
-        data["movement"].x = self.get_movement_features()
         data["phase"].x = self.get_phase_features()
         data["intersection"].x = torch.zeros(len(self.net.signalized_intersections), 1)
-        edge_index_movement_to_phase = []
-        for phase in self.net.phases:
-            movements_signals = self.net.get_movement_signals(phase)
-            movements = [movement for movement, signal in movements_signals.items() if signal in ["g", "G"]]
-            edge_index_movement_to_phase += [(movement, phase) for movement in movements]
-        data["movement", "to", "phase"].edge_index = to_edge_index(
-            edge_index_movement_to_phase, self.net.movements, self.net.phases)
-        data["phase", "to", "phase"].edge_index = to_edge_index(
-            self.net.index["phase", "to", "phase"], self.net.phases, self.net.phases)
         data["phase", "to", "intersection"].edge_index = to_edge_index(
             self.net.index[("phase", "to", "intersection")], self.net.phases, self.net.signalized_intersections)
         return data
 
-    def get_movement_features(self):
-        x = []
-        for movement in self.net.movements:
-            in_lane, _, out_lane = movement
-            in_lane_veh = self.net.get_vehicle_density(lane=in_lane)
-            out_lane_veh = self.net.get_vehicle_density(lane=out_lane)
-            x.append([in_lane_veh, out_lane_veh])
-        return torch.tensor(x, dtype=torch.float32)
-
     def get_phase_features(self):
         x = []
         for phase in self.net.phases:
-            intersection, _ = phase
-            active = int(self.net.get_current_phase(intersection=intersection) == phase)
-            x.append([active])
+            pressure = self.net.get_pressure(phase=phase)
+            x.append([pressure])
         return torch.tensor(x, dtype=torch.float32)
 
     def get_intersection_features(self):
         x = []
         for _ in self.net.intersections:
             x.append([0.0])
+        return torch.tensor(x, dtype=torch.float32)
+
+    def get_rewards(self) -> torch.Tensor:
+        return - torch.tensor([self.net.get_pressure(intersection=intersection, method="density")
+                               for intersection in self.net.signalized_intersections], dtype=torch.float32)
+
+
+class PressLightProblemFormulation(ProblemFormulation):
+
+    def __init__(self, *args, n_segments: int = 3):
+        super(PressLightProblemFormulation, self).__init__(*args)
+        self.net.init_segments(n_segments=n_segments)
+
+    def get_state(self) -> Any:
+        data = HeteroData()
+        data["intersection"].x = self.get_intersection_features()
+        return data
+
+    def get_intersection_features(self):
+        x = []
+        for intersection in self.net.signalized_intersections:
+            phases = self.net.get_phases(intersection=intersection)
+            current_phase = self.net.get_current_phase(intersection=intersection)
+            x_phase_one_hot = [int(phase == current_phase) for phase in phases]
+            x_in_segment_n_veh = [self.net.get_vehicle_number(segment=segment)
+                                  for segment, i in self.net.index[("segment", "to_down", "intersection")]
+                                  if i == intersection]
+            x_out_lane_n_veh = [self.net.get_vehicle_number(lane=lane)
+                                for lane, i in self.net.index[("lane", "to_up", "intersection")]
+                                if i == intersection]
+            x.append(x_phase_one_hot + x_in_segment_n_veh + x_out_lane_n_veh)
         return torch.tensor(x, dtype=torch.float32)
 
     def get_rewards(self) -> torch.Tensor:
@@ -112,44 +136,30 @@ class TransferLightProblemFormulation(ProblemFormulation):
         metadata = dict()
 
         node_dim = defaultdict(lambda: 0)
-        #node_dim["segment"] = 9
-        #node_dim["movement"] = 3
-        node_dim["movement"] = 2
+        node_dim["segment"] = 9
+        node_dim["movement"] = 1
         node_dim["phase"] = 1
         node_dim["intersection"] = 1
         metadata["node_dim"] = node_dim
 
         edge_dim = defaultdict(lambda: 0)
         edge_dim[("movement", "to", "phase")] = 3
-        edge_dim[("movement", "to", "movement")] = 4
         edge_dim[("phase", "to", "phase")] = 1
         metadata["edge_dim"] = edge_dim
 
         return metadata
 
-    def get_rewards(self) -> torch.Tensor:
-        return - torch.tensor([self.net.get_pressure(intersection=intersection, method="density")
-                               for intersection in self.net.signalized_intersections], dtype=torch.float32)
-
     def get_state(self) -> HeteroData:
         data = HeteroData()
-        #data["segment"].x = self.get_segment_features()
+        data["segment"].x = self.get_segment_features()
         data["movement"].x = self.get_movement_features()
         data["phase"].x = self.get_phase_features()
         data["intersection"].x = self.get_intersection_features()
 
-        #data["segment", "to", "segment"].edge_index = to_edge_index(
-        #    self.net.index[("segment", "to", "segment")], self.net.segments, self.net.segments)
-        #data["segment", "to_down", "movement"].edge_index = to_edge_index(
-        #    self.net.index[("segment", "to_down", "movement")], self.net.segments, self.net.movements)
-        #data["segment", "to_up", "movement"].edge_index = to_edge_index(
-        #    self.net.index[("segment", "to_up", "movement")], self.net.segments, self.net.movements)
-        #data["movement", "to", "movement"].edge_index = to_edge_index(
-        #    self.net.index[("movement", "to", "movement")], self.net.movements, self.net.movements)
-        #data["movement", "to_down", "movement"].edge_index = to_edge_index(
-        #    self.net.index[("movement", "to_down", "movement")], self.net.movements, self.net.movements)
-        #data["movement", "to_up", "movement"].edge_index = to_edge_index(
-        #    self.net.index[("movement", "to_up", "movement")], self.net.movements, self.net.movements)
+        data["segment", "to_down", "movement"].edge_index = to_edge_index(
+            self.net.index[("segment", "to_down", "movement")], self.net.segments, self.net.movements)
+        data["segment", "to_up", "movement"].edge_index = to_edge_index(
+            self.net.index[("segment", "to_up", "movement")], self.net.segments, self.net.movements)
         data["movement", "to", "phase"].edge_index = to_edge_index(
             self.net.index[("movement", "to", "phase")], self.net.movements, self.net.phases)
         data["phase", "to", "phase"].edge_index = to_edge_index(
@@ -157,7 +167,6 @@ class TransferLightProblemFormulation(ProblemFormulation):
         data["phase", "to", "intersection"].edge_index = to_edge_index(
             self.net.index[("phase", "to", "intersection")], self.net.phases, self.net.signalized_intersections)
 
-        #data["movement", "to", "movement"].edge_attr = self.get_movement_to_movement_edge_attr()
         data["movement", "to", "phase"].edge_attr = self.get_movement_to_phase_edge_attr()
         data["phase", "to", "phase"].edge_attr = self.get_phase_to_phase_edge_attr()
 
@@ -168,7 +177,7 @@ class TransferLightProblemFormulation(ProblemFormulation):
     def get_segment_features(self):
         x = []
         for segment in self.net.segments:
-            veh_density = self.net.get_vehicle_density(segment=segment)
+            veh_density = self.net.get_vehicle_number(segment=segment)
             x.append([veh_density])
         pos = torch.tensor(self.net.pos["segment"])
         pe = sinusoidal_positional_encoding(pos, 8)
@@ -176,14 +185,8 @@ class TransferLightProblemFormulation(ProblemFormulation):
 
     def get_movement_features(self):
         x = []
-        for movement in self.net.movements:
-            in_lane, _, out_lane = movement
-            in_lane_density = self.net.get_vehicle_density(lane=in_lane)
-            out_lane_density = self.net.get_vehicle_density(lane=out_lane)
-            x.append([in_lane_density, out_lane_density])
-            #signal = self.net.get_current_signal(movement)
-            #signal = [int(signal == "G"), int(signal == "g"), int(signal == "r")]
-            #x.append(signal)
+        for _ in self.net.movements:
+            x.append([0.0])
         return torch.tensor(x, dtype=torch.float32)
 
     def get_phase_features(self):
@@ -230,3 +233,7 @@ class TransferLightProblemFormulation(ProblemFormulation):
                        len(green_movements_a.union(green_movements_b)))
             x.append([float(overlap)])
         return torch.tensor(x, dtype=torch.float32)
+
+    def get_rewards(self) -> torch.Tensor:
+        return - torch.tensor([self.net.get_pressure(intersection=intersection, method="density")
+                               for intersection in self.net.signalized_intersections], dtype=torch.float32)

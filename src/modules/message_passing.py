@@ -75,12 +75,9 @@ class HeteroMessagePassing(MessagePassing):
             msg_dim += output_dim
         upd_fct_class_name = update_fct["class_name"]
         upd_fct_init_args = update_fct["init_args"]
-        if "dst_dim" not in upd_fct_init_args.keys():
-            upd_fct_init_args["dst_dim"] = dst_dim
-        if "msg_dim" not in upd_fct_init_args.keys():
-            upd_fct_init_args["msg_dim"] = msg_dim
-        if "output_dim" not in upd_fct_init_args.keys():
-            upd_fct_init_args["output_dim"] = output_dim
+        upd_fct_init_args["dst_dim"] = dst_dim
+        upd_fct_init_args["msg_dim"] = msg_dim
+        upd_fct_init_args["output_dim"] = output_dim
         self.upd_fct = UpdateFct.create(upd_fct_class_name, upd_fct_init_args)
         self.skip_connection = skip_connection
         if skip_connection:
