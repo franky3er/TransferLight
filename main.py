@@ -1,4 +1,5 @@
 import argparse
+from collections import defaultdict
 import ntpath
 import os
 import subprocess
@@ -31,11 +32,16 @@ def train_handler(args):
         agent_spec = agent_specs[args.agent[0]]
         results_dir = agent_spec.agent_dir
         checkpoint_dir = os.path.join(results_dir, "checkpoints")
+        scenario_spec = scenario_specs[agent_spec.scenario_name]
+        train_dir = scenario_spec.train_dir
+        max_time = scenario_spec.train_max_time
+        max_patience = scenario_spec.train_max_patience
+        problem_formulation = agent_spec.problem_formulation
+        use_default = agent_spec.is_default
         environment = Environment.create(EnvironmentConfig.MP_MARL["class_name"],
                                          dict(EnvironmentConfig.MP_MARL["init_args"],
-                                              scenarios_dirs=scenario_specs[agent_spec.scenario_name].train_dir,
-                                              problem_formulation=agent_spec.problem_formulation,
-                                              use_default=agent_spec.is_default))
+                                              scenarios_dirs=train_dir, max_time=max_time, max_patience=max_patience,
+                                              problem_formulation=problem_formulation, use_default=use_default))
         agent = Agent.create(agent_spec.agent_config["class_name"], agent_spec.agent_config["init_args"])
         agent.fit(environment, steps=TRAIN_STEPS, skip_steps=TRAIN_SKIP_STEPS, checkpoint_dir=checkpoint_dir)
     else:
@@ -52,9 +58,17 @@ def train_handler(args):
 def test_handler(args):
     device = args.device
     params.DEVICE = device
-    single_agent = len(args.agent) == 1 and "ALL" not in args.agent
-    single_checkpoint = len(args.checkpoint) == 1 and "ALL" not in args.checkpoint
-    if single_agent and single_checkpoint and "ALL" not in args.scenario and "AGENT" not in args.scenario:
+    agent_constraints_satisfied = len(args.agent) == 1 and "ALL" not in args.agent
+    checkpoint_constraints_satisfied = len(args.checkpoint) == 1 and "ALL" not in args.checkpoint
+    if "ALL" in args.scenario or "AGENT" in args.scenario:
+        scenario_constraints_satisfied = False
+    elif len({(scenario_specs[scenario].test_max_time, scenario_specs[scenario].test_max_patience)
+              for scenario in args.scenario}) > 1:
+        scenario_constraints_satisfied = False
+    else:
+        scenario_constraints_satisfied = True
+    if agent_constraints_satisfied and checkpoint_constraints_satisfied and scenario_constraints_satisfied:
+        print(f"Test agent '{args.agent[0]}' on scenarios {args.scenario} using checkpoint {args.checkpoint[0]}]")
         agent = args.agent[0]
         checkpoint_path = args.checkpoint[0]
         agent_spec = agent_specs[agent]
@@ -64,11 +78,13 @@ def test_handler(args):
         env_config = EnvironmentConfig.MP_MARL
         stats_dir = os.path.join(agent_spec.agent_dir, "test",
                                  "best" if checkpoint_path is None else ntpath.split(checkpoint_path)[1].split(".")[0])
+        max_time = scenario_specs[args.scenario[0]].test_max_time
+        max_patience = scenario_specs[args.scenario[0]].test_max_patience
         environment = Environment.create(env_config["class_name"],
                                          dict(env_config["init_args"],
-                                              scenarios_dirs=scenarios_dirs,
+                                              scenarios_dirs=scenarios_dirs, stats_dir=stats_dir, cycle_scenarios=False,
+                                              max_time=max_time, max_patience=max_patience,
                                               problem_formulation=agent_spec.problem_formulation,
-                                              stats_dir=stats_dir, cycle_scenarios=False,
                                               use_default=agent_spec.is_default))
         agent = Agent.create(agent_config["class_name"], agent_config["init_args"])
         agent.test(environment, checkpoint_path=checkpoint_path, stats_dir=stats_dir)
@@ -86,14 +102,17 @@ def test_handler(args):
         agent_spec = agent_specs[agent]
 
         if "AGENT" in args.scenario:
-            scenarios = [agent_spec.scenario_name]
-            if scenarios[0] is None:
+            if agent_spec.scenario_name is None:
                 print(f"No scenario for agent {agent} specified")
                 continue
+            scenario_specs_ = [scenario_specs[agent_spec.scenario_name]]
         elif "ALL" in args.scenario:
-            scenarios = list(scenario_specs.keys())
+            scenario_specs_ = scenario_specs.values()
         else:
-            scenarios = args.scenario
+            scenario_specs_ = [scenario_specs[scenario] for scenario in args.scenario]
+        scenarios = defaultdict(lambda: [])
+        for scenario_spec in scenario_specs_:
+            scenarios[(scenario_spec.test_max_time, scenario_spec.test_max_patience)].append(scenario_spec.name)
 
         if "BEST" in args.checkpoint:
             checkpoint_paths = [os.path.join(agent_spec.agent_dir, "checkpoints", "best.pt")]
@@ -106,7 +125,8 @@ def test_handler(args):
         else:
             checkpoint_paths = args.checkpoint
 
-        test_cases += [(agent, scenarios, checkpoint_path) for checkpoint_path in checkpoint_paths]
+        for scenarios in scenarios.values():
+            test_cases += [(agent, scenarios, checkpoint_path) for checkpoint_path in checkpoint_paths]
 
     for agent, scenarios, checkpoint_path in test_cases:
         scenarios = " ".join(scenarios)

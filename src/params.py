@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 import os
 import sys
-from typing import Optional
+from typing import Optional, Dict
 
 import torch
 
@@ -51,6 +51,28 @@ STARTUP_TIME = 2
 TRAIN_STEPS = 2_000
 TRAIN_SKIP_STEPS = 100
 
+RAND_ITERATIONS = 15
+RAND_MIN_DISTANCE = 100
+RAND_MAX_DISTANCE = 200
+RAND_MIN_ANGLE = 45
+RAND_NUM_TRIES = 100
+MAX_NUM_LANES = 4
+RANDOM_LANE_NUMBER = True
+SEED = 42
+
+VEHICLE_INSERTION_BEGIN = 0
+VEHICLE_INSERTION_END = 1_800
+VEHICLE_DEPARTURE_RATE = 1_800
+VEHICLE_DEPARTURE_ALPHA = 1.0
+VEHICLE_DEPARTURE_BETA = 1.0
+VEHICLE_DEPARTURE_ALPHA_MIN = 1.0
+VEHICLE_DEPARTURE_ALPHA_MAX = 5.0
+VEHICLE_DEPARTURE_BETA_MIN = 1.0
+VEHICLE_DEPARTURE_BETA_MAX = 5.0
+
+N_TRAIN_SCENARIOS = 1_000
+N_TEST_SCENARIOS = 10
+
 
 class ScenarioNames(ConfigEnum):
     FIXED_ALL = "fixed-all"
@@ -91,8 +113,17 @@ class TestScenarioDirs(ConfigEnum):
     ARTERIAL_HEAVY = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.ARTERIAL_HEAVY)
 
 
-ScenarioSpec = namedtuple("ScenarioSpec",
-                          ["name", "train_dir", "test_dir", "generator", "generator_args"])
+@dataclass
+class ScenarioSpec:
+    name: str
+    generator: str
+    generator_args: Dict
+    test_dir: str
+    test_max_time: int = VEHICLE_INSERTION_END
+    test_max_patience: int = sys.maxsize
+    train_dir: Optional[str] = None
+    train_max_time: int = sys.maxsize
+    train_max_patience: int = MAX_PATIENCE
 
 
 scenario_specs = {

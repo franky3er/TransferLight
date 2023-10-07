@@ -4,7 +4,6 @@ import sys
 from typing import Any, List, Tuple
 
 import torch
-import traci
 from sumolib.net import Net
 from torch_geometric.data import HeteroData
 

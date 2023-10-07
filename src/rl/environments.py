@@ -84,7 +84,7 @@ class Environment(ABC):
 class MarlEnvironment(Environment):
 
     def __init__(self, name: str = None, scenario_path: str = None, scenarios_dirs: Union[str, List[str]] = None,
-                 max_patience: int = sys.maxsize, max_steps: int = sys.maxsize, problem_formulation: str = None,
+                 max_patience: int = sys.maxsize, max_time: int = sys.maxsize, problem_formulation: str = None,
                  use_default: bool = False, action_time: int = ACTION_TIME,
                  yellow_change_time: int = YELLOW_CHANGE_TIME, all_red_time: int = ALL_RED_TIME,
                  demo: bool = False, stats_dir: str = None):
@@ -97,7 +97,7 @@ class MarlEnvironment(Environment):
         self.net = None
         self.sumo = "sumo-gui" if demo else "sumo"
         self.max_patience = max_patience
-        self.max_steps = max_steps
+        self.max_time = max_time
         self.use_default = use_default
         self.episode = -1
         self.total_step, self.total_time, self.episode_step, self.episode_time = 0, 0, 0, 0
@@ -168,10 +168,10 @@ class MarlEnvironment(Environment):
         max_waiting_time = 0.0 if len(traci.vehicle.getIDList()) == 0 \
             else np.max([traci.vehicle.getWaitingTime(vehID=veh_id) for veh_id in traci.vehicle.getIDList()])
         max_patience_exceeded = max_waiting_time > self.max_patience
-        max_steps_exceeded = self.episode_step > self.max_steps
+        max_time_exceeded = self.episode_time > self.max_time
         if max_patience_exceeded:
             print(f"Max patience exceeded: ({self.scenario})")
-        done = (True if traci.simulation.getMinExpectedNumber() == 0 or max_patience_exceeded or max_steps_exceeded
+        done = (True if traci.simulation.getMinExpectedNumber() == 0 or max_patience_exceeded or max_time_exceeded
                 else False)
         [callback.on_episode_end(self) for callback in self.callbacks if done]
         if return_info:
@@ -280,7 +280,7 @@ class MarlEnvironment(Environment):
 class MultiprocessingMarlEnvironment(Environment):
 
     def __init__(self, scenario_path: str = None, scenarios_dirs: str = None, cycle_scenarios: bool = True,
-                 max_patience: int = sys.maxsize, max_steps: int = sys.maxsize, problem_formulation: str = None,
+                 max_patience: int = sys.maxsize, max_time: int = sys.maxsize, problem_formulation: str = None,
                  n_workers: int = 1, use_default: bool = False, action_time: int = ACTION_TIME,
                  yellow_change_time: int = YELLOW_CHANGE_TIME, all_red_time: int = ALL_RED_TIME,
                  stats_dir: str = None):
@@ -290,7 +290,7 @@ class MultiprocessingMarlEnvironment(Environment):
         self.setup_scenarios(scenario_path, scenarios_dirs)
         self.problem_formulation_name = problem_formulation
         self.max_patience = max_patience
-        self.max_steps = max_steps
+        self.max_time = max_time
         self.use_default = use_default
         self.demo = False
         self.stats_dir = stats_dir
@@ -338,11 +338,11 @@ class MultiprocessingMarlEnvironment(Environment):
 
     def _get_work_args(self, rank: int):
         return (rank, self.pipes[rank][1], self.scenarios, self.cycle_scenarios, self.problem_formulation_name,
-                self.max_patience, self.max_steps, self.use_default, self.action_time, self.yellow_change_time,
+                self.max_patience, self.max_time, self.use_default, self.action_time, self.yellow_change_time,
                 self.all_red_time, self.stats_dir)
 
     @staticmethod
-    def work(rank, worker_end, scenarios, cycle_scenarios, problem_formulation, max_patience, max_steps, use_default,
+    def work(rank, worker_end, scenarios, cycle_scenarios, problem_formulation, max_patience, max_time, use_default,
              action_time, yellow_change_time, all_red_time, stats_dir):
         print(f"Worker {rank} started")
         env = None
@@ -359,7 +359,7 @@ class MultiprocessingMarlEnvironment(Environment):
                 print(f"Worker {rank} reset: {scenario}")
                 if env is None:
                     env = MarlEnvironment(name=rank, scenario_path=scenario, max_patience=max_patience,
-                                          max_steps=max_steps, problem_formulation=problem_formulation,
+                                          max_time=max_time, problem_formulation=problem_formulation,
                                           use_default=use_default, action_time=action_time,
                                           yellow_change_time=yellow_change_time, all_red_time=all_red_time,
                                           stats_dir=stats_dir)
