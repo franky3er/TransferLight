@@ -18,7 +18,9 @@ trainable_agent_specs = {agent_name: agent_spec for agent_name, agent_spec in ag
 
 
 def setup_handler(args):
-    for scenario_spec in scenario_specs.values():
+    scenarios = args.scenario if args.scenario else scenario_specs.keys()
+    for scenario in scenarios:
+        scenario_spec = scenario_specs[scenario]
         generator = ScenariosGenerator.create(scenario_spec)
         generator.generate_scenarios()
 
@@ -157,10 +159,10 @@ def list_handler(args):
     if args.agent:
         if not args.exclude_testable:
             print("Testable agents: ")
-            print("\n".join(agent_specs.keys()))
+            print(f"{args.separator}".join(agent_specs.keys()))
         if not args.exclude_trainable:
             print("\nTrainable agents: ")
-            print("\n".join(trainable_agent_specs.keys()))
+            print(f"{args.separator}".join(trainable_agent_specs.keys()))
     elif args.scenario:
         raise NotImplementedError("Functionality not implemented yet")
 
@@ -172,6 +174,8 @@ parser = argparse.ArgumentParser(
 subparsers = parser.add_subparsers()
 
 setup_parser = subparsers.add_parser("setup", help="setup train and test scenarios")
+setup_parser.add_argument("-s", "--scenario", choices=list(scenario_specs.keys()), required=False, nargs="*",
+                          default=[])
 setup_parser.set_defaults(func=setup_handler)
 
 train_parser = subparsers.add_parser("train", help="train agent(s)")
@@ -213,6 +217,7 @@ list_parser_group_1.add_argument("-a", "--agent", help="list agents", action="st
 list_parser_group_1.add_argument("-s", "--scenario", help="list scenarios", action="store_true")
 list_parser.add_argument("--exclude-trainable", help="exclude trainable", action="store_true")
 list_parser.add_argument("--exclude-testable", help="exclude testable", action="store_true")
+list_parser.add_argument("--separator", default="\n", required=False)
 list_parser.set_defaults(func=list_handler)
 
 

@@ -23,18 +23,34 @@ class TrafficNet(net.Net):
         self.include_last_segment = None
         self.pos_segment_to_up_segment = None
         self.pos_segment_to_down_segment = None
+        self.reduce = True
 
     def init(self):
         self.intersections = [intersection_id.getID() for intersection_id in self.getNodes()]
-        self.signalized_intersections = [intersection_id for intersection_id in self.intersections
-                                         if self.getNode(intersection_id).getType() == "traffic_light"
-                                         and intersection_id in traci.trafficlight.getIDList()]
-        self.approaches = [road.getID() for road in self.getEdges()]
-        self.lanes = [lane.getID() for road_id in self.approaches for lane in self.getEdge(road_id).getLanes()]
-        self.movements = sorted(list(set([(con.getFromLane().getID(), intersection, to_lane.getID())
-                                          for intersection in self.intersections
-                                          for con in self.getNode(intersection).getConnections()
-                                          for to_lane in con.getToLane().getEdge().getLanes()])))
+        self.signalized_intersections = [intersection.getID() for intersection in self.getTrafficLights()]
+        if self.reduce:
+            self.approaches = sorted(list({con[0].getEdge().getID() for intersection in self.signalized_intersections
+                                           for con in self.getTLS(intersection).getConnections()}))
+            self.approaches += sorted(list({con[1].getEdge().getID() for intersection in self.signalized_intersections
+                                            for con in self.getTLS(intersection).getConnections()}))
+        else:
+            self.approaches = [road.getID() for road in self.getEdges()]
+        if self.reduce:
+            self.lanes = sorted(list({con[0].getID() for intersection in self.signalized_intersections
+                                      for con in self.getTLS(intersection).getConnections()}))
+            self.lanes += sorted(list({con[1].getID() for intersection in self.signalized_intersections
+                                      for con in self.getTLS(intersection).getConnections()}))
+        else:
+            self.lanes = [lane.getID() for road_id in self.approaches for lane in self.getEdge(road_id).getLanes()]
+        self.movements = set([(con.getFromLane().getID(), intersection, to_lane.getID())
+                              for intersection in self.intersections
+                              for con in self.getNode(intersection).getConnections()
+                              for to_lane in con.getToLane().getEdge().getLanes()]) if not self.reduce else set()
+        self.movements.update(set([(con[0].getID(), intersection, to_lane.getID())
+                                   for intersection in self.signalized_intersections
+                                   for con in self.getTLS(intersection).getConnections()
+                                   for to_lane in con[1].getEdge().getLanes()]))
+        self.movements = sorted(list(self.movements))
         self.phases = []
         for intersection in self.signalized_intersections:
             logic = traci.trafficlight.getCompleteRedYellowGreenDefinition(intersection)[1]
@@ -46,18 +62,10 @@ class TrafficNet(net.Net):
         self.index[("movement", "to_up", "lane")] = [(movement, movement[0]) for movement in self.movements]
         self.index[("lane", "to_up", "movement")] = [(movement[2], movement) for movement in self.movements]
         self.index[("movement", "to_down", "lane")] = [(movement, movement[2]) for movement in self.movements]
-        self.index[("lane", "to_down", "intersection")] = [
-            (lane.getID(), intersection)
-            for intersection in self.signalized_intersections
-            for edge in self.getNode(intersection).getIncoming()
-            for lane in self.getEdge(edge.getID()).getLanes()
-        ]
-        self.index[("lane", "to_up", "intersection")] = [
-            (lane.getID(), intersection)
-            for intersection in self.signalized_intersections
-            for edge in self.getNode(intersection).getOutgoing()
-            for lane in self.getEdge(edge.getID()).getLanes()
-        ]
+        self.index[("lane", "to_down", "intersection")] = sorted(list({(lane, intersection)
+                                                                       for lane, intersection, _ in self.movements}))
+        self.index[("lane", "to_up", "intersection")] = sorted(list({(lane, intersection)
+                                                                     for _, intersection, lane in self.movements}))
         self.index[("movement", "to", "phase")] = [(movement, phase)
                                                    for phase in self.phases
                                                    for movement in self.get_movement_signals(phase).keys()]
@@ -120,16 +128,12 @@ class TrafficNet(net.Net):
         self.index[("segment", "to_up", "movement")] = [(segment, movement)
                                                         for movement in self.movements
                                                         for segment in self.get_segments(movement[2])]
-        self.index[("segment", "to_down", "intersection")] = [
-            (segment, intersection)
-            for lane, intersection in self.index[("lane", "to_down", "intersection")]
-            for segment in self.get_segments(lane)
-        ]
-        self.index[("segment", "to_up", "intersection")] = [
-            (segment, intersection)
-            for lane, intersection in self.index[("lane", "to_up", "intersection")]
-            for segment in self.get_segments(lane)
-        ]
+        self.index[("segment", "to_down", "intersection")] = sorted(list({(segment, intersection)
+                                                                          for lane, intersection, _ in self.movements
+                                                                          for segment in self.get_segments(lane)}))
+        self.index[("segment", "to_up", "intersection")] = sorted(list({(segment, intersection)
+                                                                        for _, intersection, lane in self.movements
+                                                                        for segment in self.get_segments(lane)}))
 
         self.pos["segment"] = [segment[1] for segment in self.segments]
 
@@ -201,10 +205,12 @@ class TrafficNet(net.Net):
             -> Dict[Tuple[str, str, str], str]:
         intersection, state = phase
         signals = [*state]
-        movement_signals = {(con[0][0], intersection, out_lane.getID()): signal
-                            for con, signal in zip(traci.trafficlight.getControlledLinks(intersection), signals)
-                            for out_lane in self.getLane(con[0][1]).getEdge().getLanes()
-                            if not exclude_prohibited or (exclude_prohibited and signal != "r")}
+        movement_signals = {}
+        for con, signal in zip(traci.trafficlight.getControlledLinks(intersection), signals):
+            if len(con) == 0 or (exclude_prohibited and signal == "r"):
+                continue
+            for out_lane in self.getLane(con[0][1]).getEdge().getLanes():
+                movement_signals[(con[0][0], intersection, out_lane.getID())] = signal
         return movement_signals
 
     def get_current_movement_signals(self, intersection: str) -> Dict[str, str]:

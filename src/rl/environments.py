@@ -145,7 +145,7 @@ class MarlEnvironment(Environment):
                 random_phase_idx = random.randrange(len(new_phases))
                 new_logic = traci.trafficlight.Logic(f"{logic.programID}-new", logic.type, random_phase_idx, new_phases)
                 traci.trafficlight.setCompleteRedYellowGreenDefinition(intersection, new_logic)
-        self.net = read_traffic_net(net_xml_path)
+        self.net = read_traffic_net(net_xml_path, withPrograms=True)
         self.problem_formulation = ProblemFormulation.create(self.problem_formulation_name, self.net)
         state = self.problem_formulation.get_state()
         [callback.on_episode_start(self) for callback in self.callbacks]

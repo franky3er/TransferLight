@@ -128,7 +128,7 @@ class TransferLightProblemFormulation(ProblemFormulation):
 
     def __init__(self, *args, segment_length: float = 10.0):
         super(TransferLightProblemFormulation, self).__init__(*args)
-        self.net.init_segments(segment_length=segment_length)
+        self.net.init_segments(segment_length=segment_length, include_last=True)
 
     @classmethod
     def get_metadata(cls):
@@ -228,8 +228,11 @@ class TransferLightProblemFormulation(ProblemFormulation):
                                      if signal in ["G", "g"]])
             green_movements_b = set([movement for movement, signal in self.net.get_movement_signals(phase_b).items()
                                      if signal in ["G", "g"]])
-            overlap = (len(green_movements_a.intersection(green_movements_b)) /
-                       len(green_movements_a.union(green_movements_b)))
+            if not green_movements_a and not green_movements_b:
+                overlap = 0.0
+            else:
+                overlap = (len(green_movements_a.intersection(green_movements_b)) /
+                           len(green_movements_a.union(green_movements_b)))
             x.append([float(overlap)])
         return torch.tensor(x, dtype=torch.float32)
 

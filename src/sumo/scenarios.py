@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 import os
 import sys
 import random
+import shutil
+import subprocess
 from typing import List, Tuple
 
 import networkx as nx
@@ -360,3 +362,19 @@ class ArterialScenariosGenerator(ScenariosGenerator):
         sumocfg_path = os.path.join(self.dir_scenario, f"{self.name_scenario}.sumocfg")
         create_sumocfg_file(sumocfg_path, net_xml=self.net_xml_name, rou_xml=",".join(self.rou_xml_names),
                             add_xml=self.tls_add_xml_name)
+
+
+class RESCOScenariosGenerator(ScenariosGenerator):
+
+    def _init(self, name: str):
+        self.name = name
+
+    def generate_scenarios(self):
+        if not os.path.exists(RESCO_ROOT):
+            cmd = f"git clone {RESCO_GITHUB_LINK} {RESCO_ROOT}"
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        scenario_src_dir = os.path.join(RESCO_SCENARIOS_DIR, self.name)
+        if not os.path.exists(self.train_dir):
+            shutil.copytree(scenario_src_dir, self.train_dir)
+        if not os.path.exists(self.test_dir):
+            shutil.copytree(scenario_src_dir, self.test_dir)

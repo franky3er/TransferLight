@@ -131,3 +131,4 @@ dmypy.json
 # Scenarios Dir
 scenarios/*
 results/*
+tmp/*

@@ -21,6 +21,14 @@ TEST_SCENARIOS_ROOT = os.path.join(SCENARIOS_ROOT, "test")
 RESULTS_ROOT = os.path.join(PROJECT_ROOT, "results")
 SCRIPTS_ROOT = os.path.join(PROJECT_ROOT, "scripts")
 
+RESCO_GITHUB_LINK = "https://github.com/Pi-Star-Lab/RESCO.git"
+RESCO_ROOT = os.path.join(PROJECT_ROOT, "tmp", "RESCO")
+RESCO_SCENARIOS_DIR = os.path.join(RESCO_ROOT, "resco_benchmark", "environments")
+RESCO_COLOGNE3_DIR = os.path.join(RESCO_SCENARIOS_DIR, "cologne3")
+RESCO_COLOGNE8_DIR = os.path.join(RESCO_SCENARIOS_DIR, "cologne8")
+RESCO_INGOLSTADT7_DIR = os.path.join(RESCO_SCENARIOS_DIR, "ingolstadt7")
+RESCO_INGOLSTADT21_DIR = os.path.join(RESCO_SCENARIOS_DIR, "ingolstadt21")
+
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 SUMO_HOME = None
@@ -85,6 +93,10 @@ class ScenarioNames(ConfigEnum):
     RANDOM_RATE = "random-rate"
     ARTERIAL_LIGHT = "arterial-light"
     ARTERIAL_HEAVY = "arterial-heavy"
+    COLOGNE3 = "cologne3"
+    COLOGNE8 = "cologne8"
+    INGOLSTADT7 = "ingolstadt7"
+    INGOLSTADT21 = "ingolstadt21"
 
 
 class TrainScenariosDirs(ConfigEnum):
@@ -98,6 +110,10 @@ class TrainScenariosDirs(ConfigEnum):
     RANDOM_RATE = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.RANDOM_RATE)
     ARTERIAL_LIGHT = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.ARTERIAL_LIGHT)
     ARTERIAL_HEAVY = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.ARTERIAL_HEAVY)
+    COLOGNE3 = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.COLOGNE3)
+    COLOGNE8 = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.COLOGNE8)
+    INGOLSTADT7 = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.INGOLSTADT7)
+    INGOLSTADT21 = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.INGOLSTADT21)
 
 
 class TestScenarioDirs(ConfigEnum):
@@ -111,6 +127,10 @@ class TestScenarioDirs(ConfigEnum):
     RANDOM_RATE = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.RANDOM_RATE)
     ARTERIAL_LIGHT = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.ARTERIAL_LIGHT)
     ARTERIAL_HEAVY = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.ARTERIAL_HEAVY)
+    COLOGNE3 = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.COLOGNE3)
+    COLOGNE8 = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.COLOGNE8)
+    INGOLSTADT7 = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.INGOLSTADT7)
+    INGOLSTADT21 = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.INGOLSTADT21)
 
 
 @dataclass
@@ -198,6 +218,34 @@ scenario_specs = {
         generator="ArterialScenariosGenerator",
         generator_args={"n_intersections": 5, "lane_length": 200.0, "allowed_speed": 13.89, "arterial_flow_rate": 300.0,
                         "side_street_flow_rate": 180.0}
+    ),
+    ScenarioNames.COLOGNE3: ScenarioSpec(
+        name=ScenarioNames.COLOGNE3,
+        train_dir=TrainScenariosDirs.COLOGNE3,
+        test_dir=TestScenarioDirs.COLOGNE3,
+        generator="RESCOScenariosGenerator",
+        generator_args={"name": ScenarioNames.COLOGNE3}
+    ),
+    ScenarioNames.COLOGNE8: ScenarioSpec(
+        name=ScenarioNames.COLOGNE8,
+        train_dir=TrainScenariosDirs.COLOGNE3,
+        test_dir=TestScenarioDirs.COLOGNE3,
+        generator="RESCOScenariosGenerator",
+        generator_args={"name": ScenarioNames.COLOGNE8}
+    ),
+    ScenarioNames.INGOLSTADT7: ScenarioSpec(
+        name=ScenarioNames.INGOLSTADT7,
+        train_dir=TrainScenariosDirs.INGOLSTADT7,
+        test_dir=TestScenarioDirs.INGOLSTADT7,
+        generator="RESCOScenariosGenerator",
+        generator_args={"name": ScenarioNames.INGOLSTADT7}
+    ),
+    ScenarioNames.INGOLSTADT21: ScenarioSpec(
+        name=ScenarioNames.INGOLSTADT21,
+        train_dir=TrainScenariosDirs.INGOLSTADT21,
+        test_dir=TestScenarioDirs.INGOLSTADT21,
+        generator="RESCOScenariosGenerator",
+        generator_args={"name": ScenarioNames.INGOLSTADT21}
     )
 }
 
