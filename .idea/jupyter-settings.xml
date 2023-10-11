@@ -5,6 +5,16 @@
       <list>
         <JupyterConnectionParameters>
           <option name="authType" value="notebook" />
+          <option name="token" value="b233923333f8a967623b9707c7f3aab3ee93b48fe09da2ca" />
+          <option name="urlString" value="http://127.0.0.1:12345" />
+          <authParams2>
+            <map>
+              <entry key="token" value="b233923333f8a967623b9707c7f3aab3ee93b48fe09da2ca" />
+            </map>
+          </authParams2>
+        </JupyterConnectionParameters>
+        <JupyterConnectionParameters>
+          <option name="authType" value="notebook" />
           <option name="token" value="a08258de61957ac7e8462e299b8d74688920c5eff98e4c60" />
           <option name="urlString" value="http://localhost:12345" />
           <authParams2>
@@ -24,6 +34,20 @@
     </option>
     <option name="moduleParameters">
       <map>
+        <entry key="$PROJECT_DIR$/.idea/HieraGLight.iml">
+          <value>
+            <JupyterConnectionParameters>
+              <option name="authType" value="notebook" />
+              <option name="token" value="b233923333f8a967623b9707c7f3aab3ee93b48fe09da2ca" />
+              <option name="urlString" value="http://127.0.0.1:12345" />
+              <authParams2>
+                <map>
+                  <entry key="token" value="b233923333f8a967623b9707c7f3aab3ee93b48fe09da2ca" />
+                </map>
+              </authParams2>
+            </JupyterConnectionParameters>
+          </value>
+        </entry>
         <entry key="$PROJECT_DIR$/../vqvae-vc/.idea/vqvae-vc.iml">
           <value>
             <JupyterConnectionParameters>

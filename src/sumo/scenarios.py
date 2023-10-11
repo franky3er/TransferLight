@@ -364,6 +364,11 @@ class ArterialScenariosGenerator(ScenariosGenerator):
                             add_xml=self.tls_add_xml_name)
 
 
+class identity_dict(dict):
+    def __missing__(self, key):
+        return key
+
+
 class RESCOScenariosGenerator(ScenariosGenerator):
 
     def _init(self, name: str):
@@ -371,6 +376,7 @@ class RESCOScenariosGenerator(ScenariosGenerator):
 
     def generate_scenarios(self):
         if not os.path.exists(RESCO_ROOT):
+            os.makedirs(RESCO_ROOT, exist_ok=True)
             cmd = f"git clone {RESCO_GITHUB_LINK} {RESCO_ROOT}"
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         scenario_src_dir = os.path.join(RESCO_SCENARIOS_DIR, self.name)
@@ -378,3 +384,28 @@ class RESCOScenariosGenerator(ScenariosGenerator):
             shutil.copytree(scenario_src_dir, self.train_dir)
         if not os.path.exists(self.test_dir):
             shutil.copytree(scenario_src_dir, self.test_dir)
+
+        net_xml_path = os.path.join(self.test_dir, f"{self.name}.net.xml")
+        rou_xml_path = os.path.join(self.test_dir, f"{self.name}.rou.xml")
+        cmd = (f"netconvert -s {net_xml_path} -R --geometry.remove.min-length 5 -o {net_xml_path} "
+               f"--output.original-names")
+        subprocess.run(cmd, shell=True)
+
+        edge_replacements = identity_dict()
+        tree = ET.parse(net_xml_path)
+        root = tree.getroot()
+        for edge in root.iter("edge"):
+            edge_id = edge.get("id")
+            for param in edge.iter("param"):
+                old_edge_ids = param.get("value").split(" ")
+                for old_edge_id in old_edge_ids:
+                    edge_replacements[old_edge_id] = edge_id
+
+        tree = ET.parse(rou_xml_path)
+        root = tree.getroot()
+        for trip in root.iter("trip"):
+            from_edge = edge_replacements[trip.get("from")]
+            to_edge = edge_replacements[trip.get("to")]
+            trip.set("from", from_edge)
+            trip.set("to", to_edge)
+        tree.write(rou_xml_path)

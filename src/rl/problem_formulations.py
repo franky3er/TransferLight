@@ -70,7 +70,7 @@ class MaxPressureProblemFormulation(ProblemFormulation):
     def get_state(self) -> HeteroData:
         data = HeteroData()
         data["phase"].x = self.get_phase_features()
-        data["intersection"].x = torch.zeros(len(self.net.signalized_intersections), 1)
+        data["intersection"].x = self.get_intersection_features()
         data["phase", "to", "intersection"].edge_index = to_edge_index(
             self.net.index[("phase", "to", "intersection")], self.net.phases, self.net.signalized_intersections)
         return data
@@ -84,7 +84,7 @@ class MaxPressureProblemFormulation(ProblemFormulation):
 
     def get_intersection_features(self):
         x = []
-        for _ in self.net.intersections:
+        for _ in self.net.signalized_intersections:
             x.append([0.0])
         return torch.tensor(x, dtype=torch.float32)
 

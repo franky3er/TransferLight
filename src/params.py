@@ -1,4 +1,3 @@
-from collections import namedtuple
 from dataclasses import dataclass
 from enum import Enum
 import os
@@ -228,8 +227,8 @@ scenario_specs = {
     ),
     ScenarioNames.COLOGNE8: ScenarioSpec(
         name=ScenarioNames.COLOGNE8,
-        train_dir=TrainScenariosDirs.COLOGNE3,
-        test_dir=TestScenarioDirs.COLOGNE3,
+        train_dir=TrainScenariosDirs.COLOGNE8,
+        test_dir=TestScenarioDirs.COLOGNE8,
         generator="RESCOScenariosGenerator",
         generator_args={"name": ScenarioNames.COLOGNE8}
     ),

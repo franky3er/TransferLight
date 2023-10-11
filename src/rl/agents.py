@@ -1,5 +1,6 @@
 from abc import abstractmethod
 from collections import defaultdict
+from dataclasses import dataclass
 import os.path
 from pathlib import Path
 import sys
@@ -22,11 +23,20 @@ from src import params
 from src.rl.environments import MarlEnvironment, MultiprocessingMarlEnvironment, MPMarlEnvMetaData, MarlEnvMetaData
 
 
+@dataclass
+class AgentRecord:
+    scenario: str
+    intersection: str
+    action_seq: str
+    mc_means_seq: str
+    mc_stds_seq: str
+
+
 class Agent(nn.Module):
 
     def __init__(self):
         super(Agent, self).__init__()
-        self.stats = defaultdict(lambda: pd.DataFrame())
+        self.records = defaultdict(lambda: dict())
 
     @classmethod
     def create(cls, class_name: str, init_args: Dict):
@@ -75,36 +85,39 @@ class Agent(nn.Module):
 
     def _update_worker_stats(self, actions: List[int], mc_means: List[float], mc_stds: List[float],
                              metadata: MarlEnvMetaData):
-        records = defaultdict(lambda: [])
         action_offsets = [0] + metadata.action_offsets
+        scenario = metadata.scenario_name
         for rank in range(metadata.n_agents):
-            records["scenario"].append(metadata.scenario_name)
-            records["episode"].append(metadata.episode)
-            records["episode_step"].append(metadata.episode_step)
-            records["total_step"].append(metadata.total_step)
-            records["episode_time"].append(metadata.episode_time)
-            records["total_time"].append(metadata.total_time)
-            records["agent_name"].append(metadata.agents_metadata[rank].name)
-            records["agent_action"].append(actions[rank])
-            records["agent_n_actions"].append(metadata.agents_metadata[rank].n_actions)
-            records["agent_action_names"].append("|".join(metadata.agents_metadata[rank].action_names))
-            agent_mc_means = None
+            intersection = metadata.agents_metadata[rank].name
+            agent_mc_means = ""
             if mc_means is not None:
                 agent_mc_means = mc_means[action_offsets[rank]:action_offsets[rank + 1]]
-                agent_mc_means = "|".join([str(mean) for mean in agent_mc_means])
-            records["agent_mc_means"].append(agent_mc_means)
-            agent_mc_stds = None
+                agent_mc_means = "/".join([str(mean) for mean in agent_mc_means])
+            agent_mc_stds = ""
             if mc_stds is not None:
                 agent_mc_stds = mc_stds[action_offsets[rank]:action_offsets[rank + 1]]
-                agent_mc_stds = "|".join([str(std) for std in agent_mc_stds])
-            records["agent_mc_stds"].append(agent_mc_stds)
-        self.stats[metadata.scenario_name] = pd.concat([self.stats[metadata.scenario_name], pd.DataFrame(records)])
+                agent_mc_stds = "/".join([str(std) for std in agent_mc_stds])
+            if intersection not in self.records[scenario].keys():
+                self.records[scenario][intersection] = AgentRecord(
+                    scenario=scenario,
+                    intersection=intersection,
+                    action_seq=str(actions[rank]),
+                    mc_means_seq=agent_mc_means,
+                    mc_stds_seq=agent_mc_stds
+                )
+            else:
+                record = self.records[scenario][intersection]
+                record.action_seq = "|".join([record.action_seq, str(actions[rank])])
+                record.mc_means_seq = "|".join([record.mc_means_seq, agent_mc_means])
+                record.mc_stds_seq = "|".join([record.mc_stds_seq, agent_mc_stds])
+                self.records[scenario][intersection] = record
 
     def _store_stats(self, stats_dir: str):
-        for scenario, records in self.stats.items():
+        for scenario, records in self.records.items():
             stats_path = os.path.join(stats_dir, f"{scenario}.agent.csv")
             os.makedirs(str(Path(stats_path).parent), exist_ok=True)
-            records.to_csv(stats_path, index=False)
+            stats = pd.DataFrame(records.values())
+            stats.to_csv(stats_path, index=False)
 
 
 class DefaultAgent(Agent):
@@ -172,10 +185,11 @@ class RandomAgent(Agent):
 
     @torch.no_grad()
     def test(self, environment: MultiprocessingMarlEnvironment, checkpoint_path: str = None, stats_dir: str = None):
-        state = environment.reset()
+        _ = environment.reset()
         while not environment.all_done():
+            state = environment.state()
             actions = self.act(state)
-            state, _, done = environment.step(actions)
+            _, _, _ = environment.step(actions)
             print(environment.info()["progress"])
         environment.close()
 
@@ -195,7 +209,7 @@ class MaxPressure(Agent):
     @torch.no_grad()
     def act(self, state: BaseData, act_random: bool = False) -> List[int]:
         state = state.clone().to(params.DEVICE)
-        pressures = state["phase"].x
+        pressures = state["phase"].x#.squeeze()
         index = state["phase", "to", "intersection"].edge_index[1].to(params.DEVICE)
         if act_random:
             actions = GroupCategorical(logits=torch.zeros_like(pressures), index=index).sample(return_indices=False)
@@ -221,11 +235,12 @@ class MaxPressure(Agent):
 
     @torch.no_grad()
     def test(self, environment: MultiprocessingMarlEnvironment, checkpoint_path: str = None, stats_dir: str = None):
-        state = environment.reset()
+        _ = environment.reset()
         while not environment.all_done():
             metadata = environment.metadata()
+            state = environment.state()
             actions = self.act(state)
-            state, _, done = environment.step(actions)
+            _, _, _ = environment.step(actions)
             self._update_stats(actions, None, None, metadata)
             print(environment.info()["progress"])
         environment.close()

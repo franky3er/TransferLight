@@ -134,19 +134,23 @@ class MarlEnvironment(Environment):
                                     ET.parse(self.scenario).getroot().find("input").find("net-file").attrib["value"])
         sumo_cmd = [self.sumo, "-c", self.scenario, "--time-to-teleport", str(-1), "--no-warnings"]
         traci.start(sumo_cmd)
-        if not self.use_default:
-            for intersection in traci.trafficlight.getIDList():
-                logic = traci.trafficlight.getCompleteRedYellowGreenDefinition(intersection)[0]
-                new_phases = []
-                for phase in logic.phases:
-                    if "y" in phase.state or len([c for c in [*phase.state] if c != "r"]) == 0:
-                        continue
-                    new_phases.append(traci.trafficlight.Phase(9999999, phase.state))
-                random_phase_idx = random.randrange(len(new_phases))
-                new_logic = traci.trafficlight.Logic(f"{logic.programID}-new", logic.type, random_phase_idx, new_phases)
-                traci.trafficlight.setCompleteRedYellowGreenDefinition(intersection, new_logic)
+        for intersection in traci.trafficlight.getIDList():
+            old_logic = traci.trafficlight.getCompleteRedYellowGreenDefinition(intersection)[0]
+            new_phases = []
+            for phase in old_logic.phases:
+                if "y" in phase.state or len([c for c in [*phase.state] if c != "r"]) == 0:
+                    continue
+                new_phases.append(traci.trafficlight.Phase(9999999, phase.state))
+            random_phase_idx = random.randrange(len(new_phases))
+            new_logic = traci.trafficlight.Logic(f"{old_logic.programID}-new", old_logic.type, random_phase_idx, new_phases)
+            traci.trafficlight.setCompleteRedYellowGreenDefinition(intersection, new_logic)
         self.net = read_traffic_net(net_xml_path, withPrograms=True)
+        self.net.scenario = self.scenario
         self.problem_formulation = ProblemFormulation.create(self.problem_formulation_name, self.net)
+        if self.use_default:
+            for intersection in traci.trafficlight.getIDList():
+                old_logic = traci.trafficlight.getCompleteRedYellowGreenDefinition(intersection)[0]
+                traci.trafficlight.setCompleteRedYellowGreenDefinition(intersection, old_logic)
         state = self.problem_formulation.get_state()
         [callback.on_episode_start(self) for callback in self.callbacks]
         return state
@@ -505,6 +509,7 @@ class MultiprocessingMarlEnvironment(Environment):
             metadata = parent_end.recv()
             self.worker_n_agents.append(metadata.n_agents)
             self.worker_n_actions.append(metadata.n_actions)
+
         self.agent_worker_assignment = list(itertools.chain(*([rank for _ in range(n_agents)]
                                                               for rank, n_agents in enumerate(self.worker_n_agents)
                                                               if not self.worker_done[rank])))

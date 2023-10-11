@@ -12,6 +12,7 @@ class TrafficNet(net.Net):
 
     def __init__(self):
         super(TrafficNet, self).__init__()
+        self.scenario = None
         self.intersections, self.signalized_intersections, self.approaches, self.lanes, self.movements, self.phases = (
             None, None, None, None, None, None)
         self.index = None
@@ -27,7 +28,7 @@ class TrafficNet(net.Net):
 
     def init(self):
         self.intersections = [intersection_id.getID() for intersection_id in self.getNodes()]
-        self.signalized_intersections = [intersection.getID() for intersection in self.getTrafficLights()]
+        self.signalized_intersections = traci.trafficlight.getIDList()
         if self.reduce:
             self.approaches = sorted(list({con[0].getEdge().getID() for intersection in self.signalized_intersections
                                            for con in self.getTLS(intersection).getConnections()}))
@@ -265,7 +266,7 @@ class TrafficNet(net.Net):
         assert bool(intersection is not None) + bool(lane is not None) + bool(approach is not None) == 1.0
         if intersection is not None:
             assert intersection in self.signalized_intersections
-            lanes = {con[0][0] for con in traci.trafficlight.getControlledLinks(intersection)}
+            lanes = {lane for lane, i in self.index[("lane", "to_down", "intersection")] if i == intersection}
             return sum([self.get_queue_length(lane=lane) for lane in lanes])
         elif lane is not None:
             return traci.lane.getLastStepHaltingNumber(lane)
@@ -276,7 +277,7 @@ class TrafficNet(net.Net):
         assert bool(intersection is not None) + bool(lane is not None) + bool(approach is not None) == 1.0
         if intersection is not None:
             assert intersection in self.signalized_intersections
-            lanes = {con[0][0] for con in traci.trafficlight.getControlledLinks(intersection)}
+            lanes = {lane for lane, i in self.index[("lane", "to_down", "intersection")] if i == intersection}
             return sum([self.get_waiting_time(lane=lane) for lane in lanes])
         elif lane is not None:
             return traci.lane.getWaitingTime(lane)
