@@ -97,7 +97,7 @@ class TrafficNet(net.Net):
         self.index[("phase", "to", "phase")] = []
         for intersection in self.signalized_intersections:
             phases = self.get_phases(intersection)
-            index_phase_to_phase = list(itertools.product(phases, repeat=2))
+            index_phase_to_phase = list(itertools.permutations(phases, 2))
             self.index[("phase", "to", "phase")] += index_phase_to_phase
 
         self.pos = dict()
@@ -120,9 +120,11 @@ class TrafficNet(net.Net):
             self.segments += segments
             self.index[("segment", "to", "segment")] += list(itertools.product(segments, repeat=2))
             self.index[("segment", "to_up", "segment")] += list(itertools.combinations_with_replacement(segments, 2))
-            self.index[("segment", "to_down", "segment")] += list(itertools.combinations_with_replacement(reversed(segments), 2))
+            self.index[("segment", "to_down", "segment")] += (
+                list(itertools.combinations_with_replacement(reversed(segments), 2)))
         self.index[("segment", "to", "lane")] = [(segment, segment[0]) for segment in self.segments]
         self.index[("lane", "to", "segment")] = [(segment[0], segment) for segment in self.segments]
+
         self.index[("segment", "to_down", "movement")] = [(segment, movement)
                                                           for movement in self.movements
                                                           for segment in self.get_segments(movement[0])]

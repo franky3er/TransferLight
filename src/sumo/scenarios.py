@@ -8,6 +8,7 @@ from typing import List, Tuple
 
 import networkx as nx
 import numpy as np
+import scipy.stats
 from scipy.stats import beta
 import sumolib
 from tqdm import tqdm
@@ -32,6 +33,7 @@ linspace = np.linspace(0, 1, 100)
 nl = "\n"
 np.random.seed(SEED)
 random.seed(SEED)
+torch.manual_seed(SEED)
 
 
 def create_rand_netgenerate_cmd(
@@ -62,7 +64,7 @@ def create_random_trips_cmd(
         rou_xml_path: str,
         vehicle_insertion_begin: int = VEHICLE_INSERTION_BEGIN,
         vehicle_insertion_end: int = VEHICLE_INSERTION_END,
-        vehicle_departure_rate: int = VEHICLE_DEPARTURE_RATE,
+        vehicle_departure_rate: float = VEHICLE_DEPARTURE_RATE,
         vehicle_departure_alpha: float = VEHICLE_DEPARTURE_ALPHA,
         vehicle_departure_beta: float = VEHICLE_DEPARTURE_BETA,
         weight_prefix: str = None
@@ -192,6 +194,10 @@ def to_graph(net: sumolib.net.Net) -> nx.Graph:
     return graph
 
 
+def normed(x: np.ndarray) -> np.ndarray:
+    return x / np.sum(x)
+
+
 class ScenariosGenerator(ABC):
 
     @classmethod
@@ -206,6 +212,8 @@ class ScenariosGenerator(ABC):
         self.name = scenario_spec.name
         self.train_dir = scenario_spec.train_dir
         self.test_dir = scenario_spec.test_dir
+        self.n_train_scenarios = scenario_spec.n_train_scenarios
+        self.n_test_scenarios = scenario_spec.n_test_scenarios
         self._init(**scenario_spec.generator_args)
 
     @abstractmethod
@@ -217,20 +225,95 @@ class ScenariosGenerator(ABC):
         pass
 
 
+class DomainRandomizationScenariosGenerator(ScenariosGenerator):
+
+    def _init(self, random_network: bool = True, random_traffic: bool = True, n_veh: int = N_VEHICLES,
+              n_flows: int = N_FLOWS, flow_alpha_range: Tuple[int, int] = FLOW_ALPHA_RANGE,
+              flow_beta_range: Tuple[int, int] = FLOW_BETA_RANGE, duration: int = DURATION):
+        self.random_network = random_network
+        self.random_traffic = random_traffic
+        self.n_veh = n_veh
+        self.n_flows = n_flows
+        self.flow_alpha_min = flow_alpha_range[0] if random_traffic else 1.0
+        self.flow_alpha_max = flow_alpha_range[1] if random_traffic else 1.0
+        self.flow_beta_min = flow_beta_range[0] if random_traffic else 1.0
+        self.flow_beta_max = flow_beta_range[1] if random_traffic else 1.0
+        self.duration = duration
+
+    def generate_scenarios(self):
+        for i in tqdm(range(self.n_train_scenarios + self.n_test_scenarios)):
+            if i < self.n_train_scenarios:
+                name_scenario = get_scenario_name(self.n_train_scenarios, i)
+                dir_scenario = self.train_dir
+            else:
+                name_scenario = get_scenario_name(self.n_test_scenarios, i - self.n_train_scenarios + 1)
+                dir_scenario = self.test_dir
+            os.makedirs(dir_scenario, exist_ok=True)
+
+            net_xml_path, trips_xml_path, rou_xml_path, sumocfg_path = get_scenario_paths(dir_scenario, name_scenario)
+
+            netgenerate_cmd = create_rand_netgenerate_cmd(net_xml_path, seed=counter() if self.random_network else SEED)
+            netgenerate(*netgenerate_cmd)
+
+            np.random.seed(SEED if self.random_traffic is False else counter())
+            random.seed(SEED if self.random_traffic is False else counter())
+
+            net = sumolib.net.readNet(net_xml_path)
+            edges = net.getEdges()
+
+            trajectories = []
+            for _ in range(self.n_flows):
+                trajectory = None
+                while trajectory is None:
+                    from_edge = random.choice(edges)
+                    to_edge = random.choice(edges)
+                    trajectory, _ = net.getFastestPath(from_edge, to_edge)
+                    if trajectory is None or len(trajectory) < 2:
+                        trajectory = None
+                trajectories.append([edge.getID() for edge in list(trajectory)])
+            alphas = np.random.uniform(self.flow_alpha_min, self.flow_alpha_max, self.n_flows)
+            betas = np.random.uniform(self.flow_alpha_min, self.flow_beta_max, self.n_flows)
+            vehicle_numbers = normed(
+                np.random.uniform(0 if self.random_traffic else 1, 1, self.n_flows)) * self.n_veh
+            vehicle_numbers = np.round(vehicle_numbers).astype(np.int32)
+
+            veh_cnt = 0
+            trips = []
+            for trajectory, alpha, beta, vehicle_number in zip(trajectories, alphas, betas, vehicle_numbers):
+                departure_times = scipy.stats.beta.ppf(np.random.uniform(0, 1, vehicle_number),
+                                                       alpha, beta) * self.duration
+                for departure_time in departure_times:
+                    trips.append((veh_cnt, departure_time, trajectory))
+                    veh_cnt += 1
+            trips = sorted(trips, key=lambda x: x[1])
+
+            routes = ET.Element("routes")
+            for veh_id, departure_time, trajectory in trips:
+                vehicle = ET.SubElement(routes, "vehicle", id=str(veh_id), depart=str(departure_time))
+                route = ET.SubElement(vehicle, "route", edges=" ".join(trajectory))
+            tree = ET.ElementTree(routes)
+            tree.write(rou_xml_path)
+
+            net_xml_name, rou_xml_name = f"{name_scenario}.net.xml", f"{name_scenario}.rou.xml"
+            create_sumocfg_file(sumocfg_path, net_xml_name, rou_xml_name)
+
+
 class TransferLightScenariosGenerator(ScenariosGenerator):
 
-    def _init(self, random_network: bool = False, random_rate: bool = False, random_location: bool = False):
+    def _init(self, random_network: bool = False, random_rate: bool = False, random_location: bool = False,
+              departure_rate: float = VEHICLE_DEPARTURE_RATE):
         self.random_network = random_network
         self.random_rate = random_rate
         self.random_location = random_location
+        self.departure_rate = departure_rate
 
     def generate_scenarios(self):
-        for i in tqdm(range(N_TRAIN_SCENARIOS + N_TEST_SCENARIOS)):
-            if i < N_TRAIN_SCENARIOS:
-                name_scenario = get_scenario_name(N_TRAIN_SCENARIOS, i)
+        for i in tqdm(range(self.n_train_scenarios + self.n_test_scenarios)):
+            if i < self.n_train_scenarios:
+                name_scenario = get_scenario_name(self.n_train_scenarios, i)
                 dir_scenario = self.train_dir
             else:
-                name_scenario = get_scenario_name(N_TEST_SCENARIOS, i - N_TRAIN_SCENARIOS + 1)
+                name_scenario = get_scenario_name(self.n_test_scenarios, i - self.n_train_scenarios + 1)
                 dir_scenario = self.test_dir
             os.makedirs(dir_scenario, exist_ok=True)
 
@@ -247,7 +330,8 @@ class TransferLightScenariosGenerator(ScenariosGenerator):
 
             random_trips_cmd = create_random_trips_cmd(net_xml_path, trips_xml_path, rou_xml_path,
                                                        vehicle_departure_alpha=alpha, vehicle_departure_beta=beta,
-                                                       weight_prefix=weights_prefix)
+                                                       weight_prefix=weights_prefix,
+                                                       vehicle_departure_rate=self.departure_rate)
             randomTrips(*random_trips_cmd)
 
             net_xml_name, rou_xml_name = f"{name_scenario}.net.xml", f"{name_scenario}.rou.xml"
@@ -259,8 +343,8 @@ class ArterialScenariosGenerator(ScenariosGenerator):
     def _init(
             self,
             n_intersections: int = 6,
-            lane_length: float = 300.0,
-            allowed_speed: float = 10.0,
+            lane_length: float = 200.0,
+            allowed_speed: float = 13.89,
             arterial_flow_rate: float = VEHICLE_DEPARTURE_RATE,
             side_street_flow_rate: float = VEHICLE_DEPARTURE_RATE,
             saturation_flow_rate: float = SATURATION_FLOW_RATE,
@@ -283,15 +367,15 @@ class ArterialScenariosGenerator(ScenariosGenerator):
         self.green_time_arterial = (y_arterial / Y) * (c_0 - L) + l
         self.green_time_side_street = (y_side / Y) * (c_0 - L) + l
         self.green_wave_offset = lane_length / allowed_speed
+        self.startup_time = startup_time
 
     def generate_scenarios(self):
-        n_train_scenarios = 100
-        for i in tqdm(range(n_train_scenarios + N_TEST_SCENARIOS)):
-            if i < n_train_scenarios:
-                self.name_scenario = get_scenario_name(n_train_scenarios, i)
+        for i in tqdm(range(self.n_train_scenarios + self.n_test_scenarios)):
+            if i < self.n_train_scenarios:
+                self.name_scenario = get_scenario_name(self.n_train_scenarios, i)
                 self.dir_scenario = self.train_dir
             else:
-                self.name_scenario = get_scenario_name(N_TEST_SCENARIOS, i - n_train_scenarios + 1)
+                self.name_scenario = get_scenario_name(self.n_test_scenarios, i - self.n_train_scenarios + 1)
                 self.dir_scenario = self.test_dir
             os.makedirs(self.dir_scenario, exist_ok=True)
 
@@ -339,7 +423,7 @@ class ArterialScenariosGenerator(ScenariosGenerator):
         additional_content = []
         for i in range(self.n_intersections):
             tl_logic = f"""
-                <tlLogic id="A{i}" type="static" programID="a" offset="{i*self.green_wave_offset}">
+                <tlLogic id="A{i}" type="static" programID="a" offset="{i*self.green_wave_offset + ((i>0) * self.startup_time)}">
                     <phase duration="{self.green_time_arterial}" state="GGrrGGrr"/>
                     <phase duration="{self.yellow_change_time}" state="yyrryyrr"/>
                     <phase duration="{self.all_red_time}" state="rrrrrrrr"/>
@@ -349,7 +433,7 @@ class ArterialScenariosGenerator(ScenariosGenerator):
                 </tlLogic>
             """
             additional_content.append(tl_logic)
-        "\n".join(additional_content)
+        "".join(additional_content)
         content = f"""
         <additional>
         {additional_content}
@@ -378,34 +462,35 @@ class RESCOScenariosGenerator(ScenariosGenerator):
         if not os.path.exists(RESCO_ROOT):
             os.makedirs(RESCO_ROOT, exist_ok=True)
             cmd = f"git clone {RESCO_GITHUB_LINK} {RESCO_ROOT}"
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=True)
         scenario_src_dir = os.path.join(RESCO_SCENARIOS_DIR, self.name)
         if not os.path.exists(self.train_dir):
             shutil.copytree(scenario_src_dir, self.train_dir)
         if not os.path.exists(self.test_dir):
             shutil.copytree(scenario_src_dir, self.test_dir)
 
-        net_xml_path = os.path.join(self.test_dir, f"{self.name}.net.xml")
-        rou_xml_path = os.path.join(self.test_dir, f"{self.name}.rou.xml")
-        cmd = (f"netconvert -s {net_xml_path} -R --geometry.remove.min-length 5 -o {net_xml_path} "
-               f"--output.original-names")
-        subprocess.run(cmd, shell=True)
+        for scenario_dir in [self.test_dir, self.train_dir]:
+            net_xml_path = os.path.join(scenario_dir, f"{self.name}.net.xml")
+            rou_xml_path = os.path.join(scenario_dir, f"{self.name}.rou.xml")
+            cmd = (f"netconvert -s {net_xml_path} -R --geometry.remove.min-length 5 -o {net_xml_path} "
+                   f"--output.original-names")
+            subprocess.run(cmd, shell=True)
 
-        edge_replacements = identity_dict()
-        tree = ET.parse(net_xml_path)
-        root = tree.getroot()
-        for edge in root.iter("edge"):
-            edge_id = edge.get("id")
-            for param in edge.iter("param"):
-                old_edge_ids = param.get("value").split(" ")
-                for old_edge_id in old_edge_ids:
-                    edge_replacements[old_edge_id] = edge_id
+            edge_replacements = identity_dict()
+            tree = ET.parse(net_xml_path)
+            root = tree.getroot()
+            for edge in root.iter("edge"):
+                edge_id = edge.get("id")
+                for param in edge.iter("param"):
+                    old_edge_ids = param.get("value").split(" ")
+                    for old_edge_id in old_edge_ids:
+                        edge_replacements[old_edge_id] = edge_id
 
-        tree = ET.parse(rou_xml_path)
-        root = tree.getroot()
-        for trip in root.iter("trip"):
-            from_edge = edge_replacements[trip.get("from")]
-            to_edge = edge_replacements[trip.get("to")]
-            trip.set("from", from_edge)
-            trip.set("to", to_edge)
-        tree.write(rou_xml_path)
+            tree = ET.parse(rou_xml_path)
+            root = tree.getroot()
+            for trip in root.iter("trip"):
+                from_edge = edge_replacements[trip.get("from")]
+                to_edge = edge_replacements[trip.get("to")]
+                trip.set("from", from_edge)
+                trip.set("to", to_edge)
+            tree.write(rou_xml_path)

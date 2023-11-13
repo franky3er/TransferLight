@@ -5,6 +5,7 @@ from src.params import PYTHON, RANDOM_TRIPS_SCRIPT, TLS_CYCLE_ADAPTATION_SCRIPT,
 
 def netgenerate(*args):
     cmd = ["netgenerate"] + [str(arg) for arg in args]
+    print(" ".join(cmd))
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 

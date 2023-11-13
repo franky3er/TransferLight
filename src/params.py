@@ -73,63 +73,90 @@ VEHICLE_DEPARTURE_RATE = 1_800
 VEHICLE_DEPARTURE_ALPHA = 1.0
 VEHICLE_DEPARTURE_BETA = 1.0
 VEHICLE_DEPARTURE_ALPHA_MIN = 1.0
-VEHICLE_DEPARTURE_ALPHA_MAX = 5.0
+VEHICLE_DEPARTURE_ALPHA_MAX = 10.0
 VEHICLE_DEPARTURE_BETA_MIN = 1.0
-VEHICLE_DEPARTURE_BETA_MAX = 5.0
+VEHICLE_DEPARTURE_BETA_MAX = 10.0
+
+N_VEHICLES = 300
+N_FLOWS = 25
+FLOW_ALPHA_RANGE = (1.0, 10.0)
+FLOW_BETA_RANGE = (1.0, 10.0)
+DURATION = 900
 
 N_TRAIN_SCENARIOS = 1_000
 N_TEST_SCENARIOS = 10
 
 
 class ScenarioNames(ConfigEnum):
-    FIXED_ALL = "fixed-all"
-    FIXED_NETWORK = "fixed-network"
-    FIXED_LOCATION = "fixed-location"
-    FIXED_RATE = "fixed-rate"
-    RANDOM_ALL = "random-all"
+    FIXED = "fixed"
+    RANDOM = "random"
     RANDOM_NETWORK = "random-network"
-    RANDOM_LOCATION = "random-location"
-    RANDOM_RATE = "random-rate"
-    ARTERIAL_LIGHT = "arterial-light"
-    ARTERIAL_HEAVY = "arterial-heavy"
+    RANDOM_TRAFFIC = "random-traffic"
+
     COLOGNE3 = "cologne3"
     COLOGNE8 = "cologne8"
     INGOLSTADT7 = "ingolstadt7"
     INGOLSTADT21 = "ingolstadt21"
 
+    FIXED_ALL = "fixed-all"
+    FIXED_NETWORK = "fixed-network"
+    FIXED_LOCATION = "fixed-location"
+    FIXED_RATE = "fixed-rate"
+    RANDOM_ALL = "random-all"
+    RANDOM_LOCATION = "random-location"
+    RANDOM_RATE = "random-rate"
+    RANDOM_ALL_LIGHT = "random-all-light"
+    RANDOM_ALL_HEAVY = "random-all-heavy"
+    ARTERIAL_LIGHT = "arterial-light"
+    ARTERIAL_HEAVY = "arterial-heavy"
+
 
 class TrainScenariosDirs(ConfigEnum):
-    FIXED_ALL = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.FIXED_ALL)
-    FIXED_NETWORK = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.FIXED_NETWORK)
-    FIXED_LOCATION = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.FIXED_LOCATION)
-    FIXED_RATE = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.FIXED_RATE)
-    RANDOM_ALL = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.RANDOM_ALL)
+    FIXED = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.FIXED)
+    RANDOM = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.RANDOM)
     RANDOM_NETWORK = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.RANDOM_NETWORK)
-    RANDOM_LOCATION = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.RANDOM_LOCATION)
-    RANDOM_RATE = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.RANDOM_RATE)
-    ARTERIAL_LIGHT = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.ARTERIAL_LIGHT)
-    ARTERIAL_HEAVY = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.ARTERIAL_HEAVY)
+    RANDOM_TRAFFIC = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.RANDOM_TRAFFIC)
+
     COLOGNE3 = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.COLOGNE3)
     COLOGNE8 = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.COLOGNE8)
     INGOLSTADT7 = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.INGOLSTADT7)
     INGOLSTADT21 = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.INGOLSTADT21)
 
+    FIXED_ALL = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.FIXED_ALL)
+    FIXED_NETWORK = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.FIXED_NETWORK)
+    FIXED_LOCATION = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.FIXED_LOCATION)
+    FIXED_RATE = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.FIXED_RATE)
+    RANDOM_ALL = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.RANDOM_ALL)
+    RANDOM_LOCATION = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.RANDOM_LOCATION)
+    RANDOM_RATE = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.RANDOM_RATE)
+    RANDOM_ALL_LIGHT = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.RANDOM_ALL_LIGHT)
+    RANDOM_ALL_HEAVY = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.RANDOM_ALL_HEAVY)
+    ARTERIAL_LIGHT = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.ARTERIAL_LIGHT)
+    ARTERIAL_HEAVY = os.path.join(TRAIN_SCENARIOS_ROOT, ScenarioNames.ARTERIAL_HEAVY)
+
 
 class TestScenarioDirs(ConfigEnum):
+    FIXED = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.FIXED)
+    RANDOM = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.RANDOM)
+    RANDOM_NETWORK = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.RANDOM_NETWORK)
+    RANDOM_TRAFFIC = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.RANDOM_TRAFFIC)
+
+    COLOGNE3 = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.COLOGNE3)
+    COLOGNE8 = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.COLOGNE8)
+    INGOLSTADT7 = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.INGOLSTADT7)
+    INGOLSTADT21 = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.INGOLSTADT21)
+
     FIXED_ALL = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.FIXED_ALL)
     FIXED_NETWORK = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.FIXED_NETWORK)
     FIXED_LOCATION = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.FIXED_LOCATION)
     FIXED_RATE = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.FIXED_RATE)
     RANDOM_ALL = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.RANDOM_ALL)
-    RANDOM_NETWORK = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.RANDOM_NETWORK)
     RANDOM_LOCATION = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.RANDOM_LOCATION)
     RANDOM_RATE = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.RANDOM_RATE)
+    RANDOM_ALL_LIGHT = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.RANDOM_ALL_LIGHT)
+    RANDOM_ALL_HEAVY = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.RANDOM_ALL_HEAVY)
     ARTERIAL_LIGHT = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.ARTERIAL_LIGHT)
     ARTERIAL_HEAVY = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.ARTERIAL_HEAVY)
-    COLOGNE3 = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.COLOGNE3)
-    COLOGNE8 = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.COLOGNE8)
-    INGOLSTADT7 = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.INGOLSTADT7)
-    INGOLSTADT21 = os.path.join(TEST_SCENARIOS_ROOT, ScenarioNames.INGOLSTADT21)
 
 
 @dataclass
@@ -140,25 +167,53 @@ class ScenarioSpec:
     test_dir: str
     test_max_time: int = VEHICLE_INSERTION_END
     test_max_patience: int = sys.maxsize
+    n_test_scenarios: int = N_TEST_SCENARIOS
     train_dir: Optional[str] = None
     train_max_time: int = sys.maxsize
     train_max_patience: int = MAX_PATIENCE
+    n_train_scenarios: int = N_TRAIN_SCENARIOS
 
 
 scenario_specs = {
+    ScenarioNames.FIXED: ScenarioSpec(
+        name=ScenarioNames.FIXED,
+        train_dir=TrainScenariosDirs.FIXED,
+        test_dir=TestScenarioDirs.FIXED,
+        n_train_scenarios=1,
+        n_test_scenarios=1,
+        generator="DomainRandomizationScenariosGenerator",
+        generator_args={"random_network": False, "random_traffic": False}
+    ),
+    ScenarioNames.RANDOM: ScenarioSpec(
+        name=ScenarioNames.RANDOM,
+        train_dir=TrainScenariosDirs.RANDOM,
+        test_dir=TestScenarioDirs.RANDOM,
+        n_train_scenarios=N_TRAIN_SCENARIOS,
+        n_test_scenarios=N_TEST_SCENARIOS,
+        generator="DomainRandomizationScenariosGenerator",
+        generator_args={"random_network": True, "random_traffic": True}
+    ),
+    ScenarioNames.RANDOM_NETWORK: ScenarioSpec(
+        name=ScenarioNames.RANDOM_NETWORK,
+        train_dir=TrainScenariosDirs.RANDOM_NETWORK,
+        test_dir=TestScenarioDirs.RANDOM_NETWORK,
+        generator="DomainRandomizationScenariosGenerator",
+        generator_args={"random_network": True, "random_traffic": False}
+    ),
+    ScenarioNames.RANDOM_TRAFFIC: ScenarioSpec(
+        name=ScenarioNames.RANDOM_TRAFFIC,
+        train_dir=TrainScenariosDirs.RANDOM_TRAFFIC,
+        test_dir=TestScenarioDirs.RANDOM_TRAFFIC,
+        generator="DomainRandomizationScenariosGenerator",
+        generator_args={"random_network": False, "random_traffic": True}
+    ),
+
     ScenarioNames.FIXED_ALL: ScenarioSpec(
         name=ScenarioNames.FIXED_ALL,
         train_dir=TrainScenariosDirs.FIXED_ALL,
         test_dir=TestScenarioDirs.FIXED_ALL,
         generator="TransferLightScenariosGenerator",
         generator_args={"random_network": False, "random_rate": False, "random_location": False}
-    ),
-    ScenarioNames.RANDOM_NETWORK: ScenarioSpec(
-        name=ScenarioNames.RANDOM_NETWORK,
-        train_dir=TrainScenariosDirs.RANDOM_NETWORK,
-        test_dir=TestScenarioDirs.RANDOM_NETWORK,
-        generator="TransferLightScenariosGenerator",
-        generator_args={"random_network": True, "random_rate": False, "random_location": False}
     ),
     ScenarioNames.RANDOM_LOCATION: ScenarioSpec(
         name=ScenarioNames.RANDOM_LOCATION,
@@ -205,7 +260,9 @@ scenario_specs = {
     ScenarioNames.ARTERIAL_HEAVY: ScenarioSpec(
         name=ScenarioNames.ARTERIAL_HEAVY,
         train_dir=TrainScenariosDirs.ARTERIAL_HEAVY,
+        n_train_scenarios=100,
         test_dir=TestScenarioDirs.ARTERIAL_HEAVY,
+        n_test_scenarios=100,
         generator="ArterialScenariosGenerator",
         generator_args={"n_intersections": 5, "lane_length": 200.0, "allowed_speed": 13.89, "arterial_flow_rate": 700.0,
                         "side_street_flow_rate": 420.0}
@@ -213,15 +270,39 @@ scenario_specs = {
     ScenarioNames.ARTERIAL_LIGHT: ScenarioSpec(
         name=ScenarioNames.ARTERIAL_LIGHT,
         train_dir=TrainScenariosDirs.ARTERIAL_LIGHT,
+        n_train_scenarios=100,
         test_dir=TestScenarioDirs.ARTERIAL_LIGHT,
+        n_test_scenarios=100,
         generator="ArterialScenariosGenerator",
         generator_args={"n_intersections": 5, "lane_length": 200.0, "allowed_speed": 13.89, "arterial_flow_rate": 300.0,
                         "side_street_flow_rate": 180.0}
     ),
+    ScenarioNames.RANDOM_ALL_HEAVY: ScenarioSpec(
+        name=ScenarioNames.RANDOM_ALL_HEAVY,
+        train_dir=TrainScenariosDirs.RANDOM_ALL_HEAVY,
+        n_train_scenarios=0,
+        n_test_scenarios=100,
+        test_dir=TestScenarioDirs.RANDOM_ALL_HEAVY,
+        generator="TransferLightScenariosGenerator",
+        generator_args={"random_network": True, "random_rate": True, "random_location": True,
+                        "departure_rate": VEHICLE_DEPARTURE_RATE * 1.5}
+    ),
+    ScenarioNames.RANDOM_ALL_LIGHT: ScenarioSpec(
+        name=ScenarioNames.RANDOM_ALL_LIGHT,
+        train_dir=TrainScenariosDirs.RANDOM_ALL_LIGHT,
+        n_train_scenarios=0,
+        test_dir=TestScenarioDirs.RANDOM_ALL_LIGHT,
+        n_test_scenarios=100,
+        generator="TransferLightScenariosGenerator",
+        generator_args={"random_network": True, "random_rate": True, "random_location": True,
+                        "departure_rate": VEHICLE_DEPARTURE_RATE * 0.5}
+    ),
     ScenarioNames.COLOGNE3: ScenarioSpec(
         name=ScenarioNames.COLOGNE3,
         train_dir=TrainScenariosDirs.COLOGNE3,
+        n_train_scenarios=100,
         test_dir=TestScenarioDirs.COLOGNE3,
+        test_max_time=3600,
         generator="RESCOScenariosGenerator",
         generator_args={"name": ScenarioNames.COLOGNE3}
     ),
@@ -229,6 +310,7 @@ scenario_specs = {
         name=ScenarioNames.COLOGNE8,
         train_dir=TrainScenariosDirs.COLOGNE8,
         test_dir=TestScenarioDirs.COLOGNE8,
+        test_max_time=3600,
         generator="RESCOScenariosGenerator",
         generator_args={"name": ScenarioNames.COLOGNE8}
     ),
@@ -236,6 +318,7 @@ scenario_specs = {
         name=ScenarioNames.INGOLSTADT7,
         train_dir=TrainScenariosDirs.INGOLSTADT7,
         test_dir=TestScenarioDirs.INGOLSTADT7,
+        test_max_time=3600,
         generator="RESCOScenariosGenerator",
         generator_args={"name": ScenarioNames.INGOLSTADT7}
     ),
@@ -243,6 +326,7 @@ scenario_specs = {
         name=ScenarioNames.INGOLSTADT21,
         train_dir=TrainScenariosDirs.INGOLSTADT21,
         test_dir=TestScenarioDirs.INGOLSTADT21,
+        test_max_time=3600,
         generator="RESCOScenariosGenerator",
         generator_args={"name": ScenarioNames.INGOLSTADT21}
     )
@@ -253,12 +337,21 @@ class AgentNames(ConfigEnum):
     TRANSFERLIGHT = "TransferLight"
     TRANSFERLIGHT_A2C = f"{TRANSFERLIGHT}-A2C"
     TRANSFERLIGHT_DQN = f"{TRANSFERLIGHT}-DQN"
+
+    TRANSFERLIGHT_A2C_FIXED = f"{TRANSFERLIGHT_A2C}-{ScenarioNames.FIXED}"
+    TRANSFERLIGHT_A2C_RANDOM = f"{TRANSFERLIGHT_A2C}-{ScenarioNames.RANDOM}"
+    TRANSFERLIGHT_A2C_RANDOM_NETWORK = f"{TRANSFERLIGHT_A2C}-{ScenarioNames.RANDOM_NETWORK}"
+    TRANSFERLIGHT_A2C_RANDOM_TRAFFIC = f"{TRANSFERLIGHT_A2C}-{ScenarioNames.RANDOM_TRAFFIC}"
+    TRANSFERLIGHT_DQN_FIXED = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.FIXED}"
+    TRANSFERLIGHT_DQN_RANDOM = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.RANDOM}"
+    TRANSFERLIGHT_DQN_RANDOM_NETWORK = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.RANDOM_NETWORK}"
+    TRANSFERLIGHT_DQN_RANDOM_TRAFFIC = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.RANDOM_TRAFFIC}"
+
     TRANSFERLIGHT_A2C_FIXED_ALL = f"{TRANSFERLIGHT_A2C}-{ScenarioNames.FIXED_ALL}"
     TRANSFERLIGHT_A2C_FIXED_NETWORK = f"{TRANSFERLIGHT_A2C}-{ScenarioNames.FIXED_NETWORK}"
     TRANSFERLIGHT_A2C_FIXED_LOCATION = f"{TRANSFERLIGHT_A2C}-{ScenarioNames.FIXED_LOCATION}"
     TRANSFERLIGHT_A2C_FIXED_RATE = f"{TRANSFERLIGHT_A2C}-{ScenarioNames.FIXED_RATE}"
     TRANSFERLIGHT_A2C_RANDOM_ALL = f"{TRANSFERLIGHT_A2C}-{ScenarioNames.RANDOM_ALL}"
-    TRANSFERLIGHT_A2C_RANDOM_NETWORK = f"{TRANSFERLIGHT_A2C}-{ScenarioNames.RANDOM_NETWORK}"
     TRANSFERLIGHT_A2C_RANDOM_LOCATION = f"{TRANSFERLIGHT_A2C}-{ScenarioNames.RANDOM_LOCATION}"
     TRANSFERLIGHT_A2C_RANDOM_RATE = f"{TRANSFERLIGHT_A2C}-{ScenarioNames.RANDOM_RATE}"
     TRANSFERLIGHT_DQN_FIXED_ALL = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.FIXED_ALL}"
@@ -266,47 +359,76 @@ class AgentNames(ConfigEnum):
     TRANSFERLIGHT_DQN_FIXED_LOCATION = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.FIXED_LOCATION}"
     TRANSFERLIGHT_DQN_FIXED_RATE = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.FIXED_RATE}"
     TRANSFERLIGHT_DQN_RANDOM_ALL = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.RANDOM_ALL}"
-    TRANSFERLIGHT_DQN_RANDOM_NETWORK = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.RANDOM_NETWORK}"
     TRANSFERLIGHT_DQN_RANDOM_LOCATION = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.RANDOM_LOCATION}"
     TRANSFERLIGHT_DQN_RANDOM_RATE = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.RANDOM_RATE}"
+
     TRANSFERLIGHT_DQN_ARTERIAL_HEAVY = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.ARTERIAL_HEAVY}"
     TRANSFERLIGHT_DQN_ARTERIAL_LIGHT = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.ARTERIAL_LIGHT}"
+
+    TRANSFERLIGHT_A2C_COLOGNE3 = f"{TRANSFERLIGHT_A2C}-{ScenarioNames.COLOGNE3}"
+    TRANSFERLIGHT_A2C_COLOGNE8 = f"{TRANSFERLIGHT_A2C}-{ScenarioNames.COLOGNE8}"
+    TRANSFERLIGHT_A2C_INGOLSTADT7 = f"{TRANSFERLIGHT_A2C}-{ScenarioNames.INGOLSTADT7}"
+    TRANSFERLIGHT_A2C_INGOLSTADT21 = f"{TRANSFERLIGHT_A2C}-{ScenarioNames.INGOLSTADT21}"
+    TRANSFERLIGHT_DQN_COLOGNE3 = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.COLOGNE3}"
+    TRANSFERLIGHT_DQN_COLOGNE8 = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.COLOGNE8}"
+    TRANSFERLIGHT_DQN_INGOLSTADT7 = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.INGOLSTADT7}"
+    TRANSFERLIGHT_DQN_INGOLSTADT21 = f"{TRANSFERLIGHT_DQN}-{ScenarioNames.INGOLSTADT21}"
+
     PRESSLIGHT = "PressLight"
     PRESSLIGHT_ARTERIAL_LIGHT = f"{PRESSLIGHT}-{ScenarioNames.ARTERIAL_LIGHT}"
     PRESSLIGHT_ARTERIAL_HEAVY = f"{PRESSLIGHT}-{ScenarioNames.ARTERIAL_HEAVY}"
+
     MAX_PRESSURE = "MaxPressure"
     FIXED_TIME = "FixedTime"
     RANDOM = "Random"
 
 
 class AgentDirs(ConfigEnum):
+    TRANSFERLIGHT_A2C_FIXED = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_A2C_FIXED)
+    TRANSFERLIGHT_A2C_RANDOM = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_A2C_RANDOM)
+    TRANSFERLIGHT_A2C_RANDOM_NETWORK = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_A2C_RANDOM_NETWORK)
+    TRANSFERLIGHT_A2C_RANDOM_TRAFFIC = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_A2C_RANDOM_TRAFFIC)
+    TRANSFERLIGHT_DQN_FIXED = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_FIXED)
+    TRANSFERLIGHT_DQN_RANDOM = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_RANDOM)
+    TRANSFERLIGHT_DQN_RANDOM_NETWORK = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_RANDOM_NETWORK)
+    TRANSFERLIGHT_DQN_RANDOM_TRAFFIC = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_RANDOM_TRAFFIC)
+
     TRANSFERLIGHT_A2C_FIXED_ALL = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_A2C_FIXED_ALL)
     TRANSFERLIGHT_A2C_FIXED_NETWORK = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_A2C_FIXED_NETWORK)
     TRANSFERLIGHT_A2C_FIXED_LOCATION = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_A2C_FIXED_LOCATION)
     TRANSFERLIGHT_A2C_FIXED_RATE = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_A2C_FIXED_RATE)
     TRANSFERLIGHT_A2C_RANDOM_ALL = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_A2C_RANDOM_ALL)
-    TRANSFERLIGHT_A2C_RANDOM_NETWORK = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_A2C_RANDOM_NETWORK)
     TRANSFERLIGHT_A2C_RANDOM_LOCATION = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_A2C_RANDOM_LOCATION)
     TRANSFERLIGHT_A2C_RANDOM_RATE = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_A2C_RANDOM_RATE)
     TRANSFERLIGHT_DQN_FIXED_ALL = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_FIXED_ALL)
     TRANSFERLIGHT_DQN_FIXED_NETWORK = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_FIXED_NETWORK)
     TRANSFERLIGHT_DQN_FIXED_LOCATION = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_FIXED_LOCATION)
     TRANSFERLIGHT_DQN_FIXED_RATE = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_FIXED_RATE)
-    TRANSFERLIGHT_DQN_RANDOM_ALL = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_RANDOM_ALL)
-    TRANSFERLIGHT_DQN_RANDOM_NETWORK = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_RANDOM_NETWORK)
+    TRANSFERLIGHT_DQN_RANDOM_ALL = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_RANDOM_ALL)  
     TRANSFERLIGHT_DQN_RANDOM_LOCATION = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_RANDOM_LOCATION)
     TRANSFERLIGHT_DQN_RANDOM_RATE = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_RANDOM_RATE)
     TRANSFERLIGHT_DQN_ARTERIAL_HEAVY = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_ARTERIAL_HEAVY)
     TRANSFERLIGHT_DQN_ARTERIAL_LIGHT = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_ARTERIAL_LIGHT)
+
+    TRANSFERLIGHT_A2C_COLOGNE3 = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_A2C_COLOGNE3)
+    TRANSFERLIGHT_A2C_COLOGNE8 = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_A2C_COLOGNE8)
+    TRANSFERLIGHT_A2C_INGOLSTADT7 = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_A2C_INGOLSTADT7)
+    TRANSFERLIGHT_A2C_INGOLSTADT21 = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_A2C_INGOLSTADT21)
+    TRANSFERLIGHT_DQN_COLOGNE3 = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_COLOGNE3)
+    TRANSFERLIGHT_DQN_COLOGNE8 = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_COLOGNE8)
+    TRANSFERLIGHT_DQN_INGOLSTADT7 = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_INGOLSTADT7)
+    TRANSFERLIGHT_DQN_INGOLSTADT21 = os.path.join(RESULTS_ROOT, AgentNames.TRANSFERLIGHT_DQN_INGOLSTADT21)
+
     PRESSLIGHT_ARTERIAL_LIGHT = os.path.join(RESULTS_ROOT, AgentNames.PRESSLIGHT_ARTERIAL_LIGHT)
     PRESSLIGHT_ARTERIAL_HEAVY = os.path.join(RESULTS_ROOT, AgentNames.PRESSLIGHT_ARTERIAL_HEAVY)
+
     MAX_PRESSURE = os.path.join(RESULTS_ROOT, AgentNames.MAX_PRESSURE)
     FIXED_TIME = os.path.join(RESULTS_ROOT, AgentNames.FIXED_TIME)
     RANDOM = os.path.join(RESULTS_ROOT, AgentNames.RANDOM)
 
 
 class TransferLightConfig(ConfigEnum):
-    HIDDEN_DIM = 64
+    HIDDEN_DIM = 128
     N_ATTENTION_HEADS = 8
     DROPOUT_PROB = 0.1
 
@@ -445,6 +567,62 @@ class AgentSpec:
 
 
 agent_specs = {
+    AgentNames.TRANSFERLIGHT_A2C_FIXED: AgentSpec(
+        agent_name=AgentNames.TRANSFERLIGHT_A2C_FIXED,
+        agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
+        agent_dir=AgentDirs.TRANSFERLIGHT_A2C_FIXED,
+        scenario_name=ScenarioNames.FIXED,
+        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
+    ),
+    AgentNames.TRANSFERLIGHT_A2C_RANDOM: AgentSpec(
+        agent_name=AgentNames.TRANSFERLIGHT_A2C_RANDOM,
+        agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
+        agent_dir=AgentDirs.TRANSFERLIGHT_A2C_RANDOM,
+        scenario_name=ScenarioNames.RANDOM,
+        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
+    ),
+    AgentNames.TRANSFERLIGHT_A2C_RANDOM_NETWORK: AgentSpec(
+        agent_name=AgentNames.TRANSFERLIGHT_A2C_RANDOM_NETWORK,
+        agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
+        agent_dir=AgentDirs.TRANSFERLIGHT_A2C_RANDOM_NETWORK,
+        scenario_name=ScenarioNames.RANDOM_NETWORK,
+        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
+    ),
+    AgentNames.TRANSFERLIGHT_A2C_RANDOM_TRAFFIC: AgentSpec(
+        agent_name=AgentNames.TRANSFERLIGHT_A2C_RANDOM_TRAFFIC,
+        agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
+        agent_dir=AgentDirs.TRANSFERLIGHT_A2C_RANDOM_TRAFFIC,
+        scenario_name=ScenarioNames.RANDOM_TRAFFIC,
+        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
+    ),
+    AgentNames.TRANSFERLIGHT_DQN_FIXED: AgentSpec(
+        agent_name=AgentNames.TRANSFERLIGHT_DQN_FIXED,
+        agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
+        agent_dir=AgentDirs.TRANSFERLIGHT_DQN_FIXED,
+        scenario_name=ScenarioNames.FIXED,
+        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
+    ),
+    AgentNames.TRANSFERLIGHT_DQN_RANDOM: AgentSpec(
+        agent_name=AgentNames.TRANSFERLIGHT_DQN_RANDOM,
+        agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
+        agent_dir=AgentDirs.TRANSFERLIGHT_DQN_RANDOM,
+        scenario_name=ScenarioNames.RANDOM,
+        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
+    ),
+    AgentNames.TRANSFERLIGHT_DQN_RANDOM_NETWORK: AgentSpec(
+        agent_name=AgentNames.TRANSFERLIGHT_DQN_RANDOM_NETWORK,
+        agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
+        agent_dir=AgentDirs.TRANSFERLIGHT_DQN_RANDOM_NETWORK,
+        scenario_name=ScenarioNames.RANDOM_NETWORK,
+        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
+    ),
+    AgentNames.TRANSFERLIGHT_DQN_RANDOM_TRAFFIC: AgentSpec(
+        agent_name=AgentNames.TRANSFERLIGHT_DQN_RANDOM_TRAFFIC,
+        agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
+        agent_dir=AgentDirs.TRANSFERLIGHT_DQN_RANDOM_TRAFFIC,
+        scenario_name=ScenarioNames.RANDOM_TRAFFIC,
+        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
+    ),
 
     # TransferLight-A2C
     AgentNames.TRANSFERLIGHT_A2C_FIXED_ALL: AgentSpec(
@@ -482,13 +660,6 @@ agent_specs = {
         scenario_name=ScenarioNames.RANDOM_ALL,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
-    AgentNames.TRANSFERLIGHT_A2C_RANDOM_NETWORK: AgentSpec(
-        agent_name=AgentNames.TRANSFERLIGHT_A2C_RANDOM_NETWORK,
-        agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
-        agent_dir=AgentDirs.TRANSFERLIGHT_A2C_RANDOM_NETWORK,
-        scenario_name=ScenarioNames.RANDOM_NETWORK,
-        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
-    ),
     AgentNames.TRANSFERLIGHT_A2C_RANDOM_LOCATION: AgentSpec(
         agent_name=AgentNames.TRANSFERLIGHT_A2C_RANDOM_LOCATION,
         agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
@@ -501,6 +672,34 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
         agent_dir=AgentDirs.TRANSFERLIGHT_A2C_RANDOM_RATE,
         scenario_name=ScenarioNames.RANDOM_RATE,
+        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
+    ),
+    AgentNames.TRANSFERLIGHT_A2C_COLOGNE3: AgentSpec(
+        agent_name=AgentNames.TRANSFERLIGHT_A2C_COLOGNE3,
+        agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
+        agent_dir=AgentDirs.TRANSFERLIGHT_A2C_COLOGNE3,
+        scenario_name=ScenarioNames.COLOGNE3,
+        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
+    ),
+    AgentNames.TRANSFERLIGHT_A2C_COLOGNE8: AgentSpec(
+        agent_name=AgentNames.TRANSFERLIGHT_A2C_COLOGNE8,
+        agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
+        agent_dir=AgentDirs.TRANSFERLIGHT_A2C_COLOGNE8,
+        scenario_name=ScenarioNames.COLOGNE8,
+        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
+    ),
+    AgentNames.TRANSFERLIGHT_A2C_INGOLSTADT7: AgentSpec(
+        agent_name=AgentNames.TRANSFERLIGHT_A2C_INGOLSTADT7,
+        agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
+        agent_dir=AgentDirs.TRANSFERLIGHT_A2C_INGOLSTADT7,
+        scenario_name=ScenarioNames.INGOLSTADT7,
+        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
+    ),
+    AgentNames.TRANSFERLIGHT_A2C_INGOLSTADT21: AgentSpec(
+        agent_name=AgentNames.TRANSFERLIGHT_A2C_INGOLSTADT21,
+        agent_config=AgentConfigs.TRANSFERLIGHT_A2C,
+        agent_dir=AgentDirs.TRANSFERLIGHT_A2C_INGOLSTADT21,
+        scenario_name=ScenarioNames.INGOLSTADT21,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
 
@@ -540,13 +739,6 @@ agent_specs = {
         scenario_name=ScenarioNames.RANDOM_ALL,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
-    AgentNames.TRANSFERLIGHT_DQN_RANDOM_NETWORK: AgentSpec(
-        agent_name=AgentNames.TRANSFERLIGHT_DQN_RANDOM_NETWORK,
-        agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
-        agent_dir=AgentDirs.TRANSFERLIGHT_DQN_RANDOM_NETWORK,
-        scenario_name=ScenarioNames.RANDOM_NETWORK,
-        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
-    ),
     AgentNames.TRANSFERLIGHT_DQN_RANDOM_LOCATION: AgentSpec(
         agent_name=AgentNames.TRANSFERLIGHT_DQN_RANDOM_LOCATION,
         agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
@@ -573,6 +765,34 @@ agent_specs = {
         agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
         agent_dir=AgentDirs.TRANSFERLIGHT_DQN_ARTERIAL_LIGHT,
         scenario_name=ScenarioNames.ARTERIAL_LIGHT,
+        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
+    ),
+    AgentNames.TRANSFERLIGHT_DQN_COLOGNE3: AgentSpec(
+        agent_name=AgentNames.TRANSFERLIGHT_DQN_COLOGNE3,
+        agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
+        agent_dir=AgentDirs.TRANSFERLIGHT_DQN_COLOGNE3,
+        scenario_name=ScenarioNames.COLOGNE3,
+        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
+    ),
+    AgentNames.TRANSFERLIGHT_DQN_COLOGNE8: AgentSpec(
+        agent_name=AgentNames.TRANSFERLIGHT_DQN_COLOGNE8,
+        agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
+        agent_dir=AgentDirs.TRANSFERLIGHT_DQN_COLOGNE8,
+        scenario_name=ScenarioNames.COLOGNE8,
+        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
+    ),
+    AgentNames.TRANSFERLIGHT_DQN_INGOLSTADT7: AgentSpec(
+        agent_name=AgentNames.TRANSFERLIGHT_DQN_INGOLSTADT7,
+        agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
+        agent_dir=AgentDirs.TRANSFERLIGHT_DQN_INGOLSTADT7,
+        scenario_name=ScenarioNames.INGOLSTADT7,
+        problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
+    ),
+    AgentNames.TRANSFERLIGHT_DQN_INGOLSTADT21: AgentSpec(
+        agent_name=AgentNames.TRANSFERLIGHT_DQN_INGOLSTADT21,
+        agent_config=AgentConfigs.TRANSFERLIGHT_DQN,
+        agent_dir=AgentDirs.TRANSFERLIGHT_DQN_INGOLSTADT21,
+        scenario_name=ScenarioNames.INGOLSTADT21,
         problem_formulation=ProblemFormulationConfig.TRANSFERLIGHT
     ),
 

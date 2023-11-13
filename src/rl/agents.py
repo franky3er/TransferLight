@@ -316,7 +316,6 @@ class DQN(Agent):
             checkpoint_dir: str = None):
         self.train()
         Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
-        highest_ema_reward = - sys.float_info.max
         _ = environment.reset()
         while environment.total_step <= steps + skip_steps:
             metadata = environment.metadata()
@@ -339,11 +338,6 @@ class DQN(Agent):
             print(info["progress"])
             if checkpoint_dir is not None and environment.total_step % 100 == 0:
                 checkpoint_path = os.path.join(checkpoint_dir, f"{environment.total_step}.pt")
-                torch.save(self.state_dict(), checkpoint_path)
-            if checkpoint_dir is not None and highest_ema_reward < environment.ema_reward:
-                print(f"New best..")
-                highest_ema_reward = environment.ema_reward
-                checkpoint_path = os.path.join(checkpoint_dir, "best.pt")
                 torch.save(self.state_dict(), checkpoint_path)
         environment.close()
 
@@ -491,7 +485,6 @@ class A2C(Agent):
         self.train()
         Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
         _ = environment.reset()
-        highest_ema_reward = - sys.float_info.max
         while environment.total_step <= steps + skip_steps:
             states = environment.state()
             states = states.to(params.DEVICE)
@@ -515,11 +508,6 @@ class A2C(Agent):
             print(info["progress"])
             if checkpoint_dir is not None and environment.total_step % 100 == 0:
                 checkpoint_path = os.path.join(checkpoint_dir, f"{environment.total_step}.pt")
-                torch.save(self.state_dict(), checkpoint_path)
-            if checkpoint_dir is not None and highest_ema_reward < environment.ema_reward:
-                print(f"New best..")
-                highest_ema_reward = environment.ema_reward
-                checkpoint_path = os.path.join(checkpoint_dir, "best.pt")
                 torch.save(self.state_dict(), checkpoint_path)
 
         environment.close()

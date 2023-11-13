@@ -134,8 +134,10 @@ class MarlEnvironment(Environment):
                                     ET.parse(self.scenario).getroot().find("input").find("net-file").attrib["value"])
         sumo_cmd = [self.sumo, "-c", self.scenario, "--time-to-teleport", str(-1), "--no-warnings"]
         traci.start(sumo_cmd)
+        old_logic_ids = dict()
         for intersection in traci.trafficlight.getIDList():
             old_logic = traci.trafficlight.getCompleteRedYellowGreenDefinition(intersection)[0]
+            old_logic_ids[intersection] = old_logic.programID
             new_phases = []
             for phase in old_logic.phases:
                 if "y" in phase.state or len([c for c in [*phase.state] if c != "r"]) == 0:
@@ -149,8 +151,10 @@ class MarlEnvironment(Environment):
         self.problem_formulation = ProblemFormulation.create(self.problem_formulation_name, self.net)
         if self.use_default:
             for intersection in traci.trafficlight.getIDList():
-                old_logic = traci.trafficlight.getCompleteRedYellowGreenDefinition(intersection)[0]
-                traci.trafficlight.setCompleteRedYellowGreenDefinition(intersection, old_logic)
+                if "a" in [logic.programID for logic in traci.trafficlight.getAllProgramLogics(intersection)]:
+                    traci.trafficlight.setProgram(intersection, "a")
+                else:
+                    traci.trafficlight.setProgram(intersection, old_logic_ids[intersection])
         state = self.problem_formulation.get_state()
         [callback.on_episode_start(self) for callback in self.callbacks]
         return state
