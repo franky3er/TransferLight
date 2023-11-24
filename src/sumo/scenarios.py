@@ -27,9 +27,6 @@ class Counter:
         self.cnt += 1
         return self.cnt
 
-
-counter = Counter()
-linspace = np.linspace(0, 1, 100)
 nl = "\n"
 np.random.seed(SEED)
 random.seed(SEED)
@@ -56,70 +53,6 @@ def create_rand_netgenerate_cmd(
         "--seed", seed
     ]
     return [str(arg) for arg in netgenerate_cmd]
-
-
-def create_random_trips_cmd(
-        net_xml_path: str,
-        trips_xml_path: str,
-        rou_xml_path: str,
-        vehicle_insertion_begin: int = VEHICLE_INSERTION_BEGIN,
-        vehicle_insertion_end: int = VEHICLE_INSERTION_END,
-        vehicle_departure_rate: float = VEHICLE_DEPARTURE_RATE,
-        vehicle_departure_alpha: float = VEHICLE_DEPARTURE_ALPHA,
-        vehicle_departure_beta: float = VEHICLE_DEPARTURE_BETA,
-        weight_prefix: str = None
-) -> List[str]:
-    departure_rates = beta.pdf(linspace, vehicle_departure_alpha, vehicle_departure_beta) \
-        * vehicle_departure_rate + 1e-10
-    random_trips_cmd = [
-        "-n", net_xml_path, "-o", trips_xml_path, "-r", rou_xml_path, "-b", vehicle_insertion_begin,
-        "-e", vehicle_insertion_end, "--random-depart", "--random", "-L",
-        "-l", "--seed", counter()
-    ]
-    random_trips_cmd += ["--insertion-rate"] + departure_rates.tolist()
-    if weight_prefix is not None:
-        random_trips_cmd += ["--weights-prefix"] + [weight_prefix]
-    return [str(arg) for arg in random_trips_cmd]
-
-
-def create_weight_files(net_xml_path: str, random_weights: bool = False, src_edge: str = None, dst_edge: str = None,
-                        begin: int = VEHICLE_INSERTION_BEGIN, end: int = VEHICLE_INSERTION_END) \
-        -> str:
-    parent_dir = os.path.dirname(net_xml_path)
-    prefix = os.path.join(parent_dir, "edge-weights")
-    net = sumolib.net.readNet(net_xml_path)
-    graph = to_graph(net)
-    if src_edge is None:
-        src_node_probas = [(n, np.random.uniform(low=0.0, high=1.0, size=1)[0] if random_weights else 1.0)
-                           for n in graph.nodes]
-    else:
-        src_node_probas = [(n, 0.0 if src_edge != n else sys.float_info.max) for n in graph.nodes]
-    if dst_edge is None:
-        dst_node_probas = [(n, np.random.uniform(low=0.0, high=1.0, size=1)[0] if random_weights else 1.0)
-                           for n in graph.nodes]
-    else:
-        dst_node_probas = [(n, 0.0 if dst_edge != n else sys.float_info.max) for n in graph.nodes]
-    trips_src_xml_path = f"{prefix}.src.xml"
-    trips_dst_xml_path = f"{prefix}.dst.xml"
-    trips_src_xml_content = f"""
-    <edgedata>
-        <interval begin="{begin}" end="{end}">
-            {"".join([f'<edge id="{n}" value="{p}"/>{nl}' for n, p in src_node_probas])}
-        </interval>
-    </edgedata>
-    """
-    trips_dst_xml_content = f"""
-    <edgedata>
-        <interval begin="{begin}" end="{end}">
-            {"".join([f'<edge id="{n}" value="{p}"/>{nl}' for n, p in dst_node_probas])}
-        </interval>
-    </edgedata>
-    """
-    with open(trips_src_xml_path, "w") as f:
-        f.write(trips_src_xml_content)
-    with open(trips_dst_xml_path, "w") as f:
-        f.write(trips_dst_xml_content)
-    return prefix
 
 
 def create_tls_cycle_adaptation_cmd(
@@ -162,6 +95,17 @@ def create_sumocfg_file(sumocfg_path: str, net_xml: str, rou_xml: str, add_xml: 
     """
     with open(sumocfg_path, "w") as f:
         f.write(content)
+
+
+def create_rou_xml_file(rou_xml_path: str, trips: Tuple[float, List[str]]):
+    trips = sorted(trips, key=lambda x: x[0])
+
+    routes = ET.Element("routes")
+    for veh_id, (departure_time, trajectory) in enumerate(trips):
+        vehicle = ET.SubElement(routes, "vehicle", id=str(veh_id), depart=str(departure_time))
+        _ = ET.SubElement(vehicle, "route", edges=" ".join(trajectory))
+    tree = ET.ElementTree(routes)
+    tree.write(rou_xml_path)
 
 
 def get_scenario_name(total: int, index: int) -> str:
@@ -229,7 +173,8 @@ class DomainRandomizationScenariosGenerator(ScenariosGenerator):
 
     def _init(self, random_network: bool = True, random_traffic: bool = True, n_veh: int = N_VEHICLES,
               n_flows: int = N_FLOWS, flow_alpha_range: Tuple[int, int] = FLOW_ALPHA_RANGE,
-              flow_beta_range: Tuple[int, int] = FLOW_BETA_RANGE, duration: int = DURATION):
+              flow_beta_range: Tuple[int, int] = FLOW_BETA_RANGE, duration: int = DURATION,
+              seed_network: int = SEED, seed_traffic: int = SEED):
         self.random_network = random_network
         self.random_traffic = random_traffic
         self.n_veh = n_veh
@@ -239,8 +184,11 @@ class DomainRandomizationScenariosGenerator(ScenariosGenerator):
         self.flow_beta_min = flow_beta_range[0] if random_traffic else 1.0
         self.flow_beta_max = flow_beta_range[1] if random_traffic else 1.0
         self.duration = duration
+        self.seed_network = seed_network
+        self.seed_traffic = seed_traffic
 
     def generate_scenarios(self):
+        counter = Counter()
         for i in tqdm(range(self.n_train_scenarios + self.n_test_scenarios)):
             if i < self.n_train_scenarios:
                 name_scenario = get_scenario_name(self.n_train_scenarios, i)
@@ -252,11 +200,12 @@ class DomainRandomizationScenariosGenerator(ScenariosGenerator):
 
             net_xml_path, trips_xml_path, rou_xml_path, sumocfg_path = get_scenario_paths(dir_scenario, name_scenario)
 
-            netgenerate_cmd = create_rand_netgenerate_cmd(net_xml_path, seed=counter() if self.random_network else SEED)
+            netgenerate_cmd = create_rand_netgenerate_cmd(
+                net_xml_path, seed=self.seed_network + counter() if self.random_network else self.seed_network)
             netgenerate(*netgenerate_cmd)
 
-            np.random.seed(SEED if self.random_traffic is False else counter())
-            random.seed(SEED if self.random_traffic is False else counter())
+            np.random.seed(self.seed_traffic if self.random_traffic is False else self.seed_traffic + counter())
+            random.seed(self.seed_traffic if self.random_traffic is False else self.seed_traffic + counter())
 
             net = sumolib.net.readNet(net_xml_path)
             edges = net.getEdges()
@@ -277,62 +226,13 @@ class DomainRandomizationScenariosGenerator(ScenariosGenerator):
                 np.random.uniform(0 if self.random_traffic else 1, 1, self.n_flows)) * self.n_veh
             vehicle_numbers = np.round(vehicle_numbers).astype(np.int32)
 
-            veh_cnt = 0
             trips = []
             for trajectory, alpha, beta, vehicle_number in zip(trajectories, alphas, betas, vehicle_numbers):
                 departure_times = scipy.stats.beta.ppf(np.random.uniform(0, 1, vehicle_number),
                                                        alpha, beta) * self.duration
                 for departure_time in departure_times:
-                    trips.append((veh_cnt, departure_time, trajectory))
-                    veh_cnt += 1
-            trips = sorted(trips, key=lambda x: x[1])
-
-            routes = ET.Element("routes")
-            for veh_id, departure_time, trajectory in trips:
-                vehicle = ET.SubElement(routes, "vehicle", id=str(veh_id), depart=str(departure_time))
-                route = ET.SubElement(vehicle, "route", edges=" ".join(trajectory))
-            tree = ET.ElementTree(routes)
-            tree.write(rou_xml_path)
-
-            net_xml_name, rou_xml_name = f"{name_scenario}.net.xml", f"{name_scenario}.rou.xml"
-            create_sumocfg_file(sumocfg_path, net_xml_name, rou_xml_name)
-
-
-class TransferLightScenariosGenerator(ScenariosGenerator):
-
-    def _init(self, random_network: bool = False, random_rate: bool = False, random_location: bool = False,
-              departure_rate: float = VEHICLE_DEPARTURE_RATE):
-        self.random_network = random_network
-        self.random_rate = random_rate
-        self.random_location = random_location
-        self.departure_rate = departure_rate
-
-    def generate_scenarios(self):
-        for i in tqdm(range(self.n_train_scenarios + self.n_test_scenarios)):
-            if i < self.n_train_scenarios:
-                name_scenario = get_scenario_name(self.n_train_scenarios, i)
-                dir_scenario = self.train_dir
-            else:
-                name_scenario = get_scenario_name(self.n_test_scenarios, i - self.n_train_scenarios + 1)
-                dir_scenario = self.test_dir
-            os.makedirs(dir_scenario, exist_ok=True)
-
-            net_xml_path, trips_xml_path, rou_xml_path, sumocfg_path = get_scenario_paths(dir_scenario, name_scenario)
-            netgenerate_cmd = create_rand_netgenerate_cmd(net_xml_path, seed=counter() if self.random_network else SEED)
-            netgenerate(*netgenerate_cmd)
-
-            alpha = np.random.uniform(VEHICLE_DEPARTURE_ALPHA_MIN, VEHICLE_DEPARTURE_ALPHA_MAX) \
-                if self.random_rate else VEHICLE_DEPARTURE_ALPHA
-            beta = np.random.uniform(VEHICLE_DEPARTURE_BETA_MIN, VEHICLE_DEPARTURE_BETA_MAX) \
-                if self.random_rate else VEHICLE_DEPARTURE_BETA
-
-            weights_prefix = create_weight_files(net_xml_path, random_weights=self.random_location)
-
-            random_trips_cmd = create_random_trips_cmd(net_xml_path, trips_xml_path, rou_xml_path,
-                                                       vehicle_departure_alpha=alpha, vehicle_departure_beta=beta,
-                                                       weight_prefix=weights_prefix,
-                                                       vehicle_departure_rate=self.departure_rate)
-            randomTrips(*random_trips_cmd)
+                    trips.append((departure_time, trajectory))
+            create_rou_xml_file(rou_xml_path, trips)
 
             net_xml_name, rou_xml_name = f"{name_scenario}.net.xml", f"{name_scenario}.rou.xml"
             create_sumocfg_file(sumocfg_path, net_xml_name, rou_xml_name)
@@ -348,6 +248,7 @@ class ArterialScenariosGenerator(ScenariosGenerator):
             arterial_flow_rate: float = VEHICLE_DEPARTURE_RATE,
             side_street_flow_rate: float = VEHICLE_DEPARTURE_RATE,
             saturation_flow_rate: float = SATURATION_FLOW_RATE,
+            duration: int = 3_600,
             yellow_change_time: float = YELLOW_CHANGE_TIME,
             all_red_time: float = ALL_RED_TIME,
             startup_time: float = STARTUP_TIME
@@ -356,6 +257,7 @@ class ArterialScenariosGenerator(ScenariosGenerator):
         self.lane_length = lane_length
         self.allowed_speed = allowed_speed
         self.arterial_demand, self.side_street_demand = arterial_flow_rate, side_street_flow_rate
+        self.duration = duration
         l = startup_time
         R = 2 * (yellow_change_time + all_red_time)
         L = 2 * l + R
@@ -368,6 +270,7 @@ class ArterialScenariosGenerator(ScenariosGenerator):
         self.green_time_side_street = (y_side / Y) * (c_0 - L) + l
         self.green_wave_offset = lane_length / allowed_speed
         self.startup_time = startup_time
+        print(c_0, self.green_time_arterial, self.green_time_side_street, self.green_wave_offset)
 
     def generate_scenarios(self):
         for i in tqdm(range(self.n_train_scenarios + self.n_test_scenarios)):
@@ -396,26 +299,24 @@ class ArterialScenariosGenerator(ScenariosGenerator):
         netgenerate(*netgenerate_cmd)
 
     def _generate_traffic(self):
-        trips, self.rou_xml_paths, self.rou_xml_names = [], [], []
-        trips.append(("bottom0A0", f"A{self.n_intersections-1}top0", self.arterial_demand))
-        for i in range(self.n_intersections):
-            trips.append((f"left{i}A{i}", f"A{i}right{i}", self.side_street_demand))
-        for i, (src_edge, dst_edge, demand) in enumerate(trips):
-            trips_xml_path = os.path.join(self.dir_scenario, f"{self.name_scenario}.trips.xml")
-            rou_xml_path = os.path.join(self.dir_scenario, f"{self.name_scenario}.{i}.rou.xml")
-            self.rou_xml_paths.append(rou_xml_path)
-            self.rou_xml_names.append(f"{self.name_scenario}.{i}.rou.xml")
-            weight_prefix = create_weight_files(self.net_xml_path, src_edge=src_edge, dst_edge=dst_edge)
-            random_trips_cmd = create_random_trips_cmd(self.net_xml_path, trips_xml_path, rou_xml_path,
-                                                       vehicle_departure_rate=demand,
-                                                       weight_prefix=weight_prefix)
-            randomTrips(*random_trips_cmd)
-        id_cnt = Counter()
-        for rou_xml_path in self.rou_xml_paths:
-            tree = ET.parse(rou_xml_path)
-            root = tree.getroot()
-            [vehicle.set("id", str(id_cnt())) for vehicle in root.iter("vehicle")]
-            tree.write(rou_xml_path)
+        self.rou_xml_name = f"{self.name_scenario}.rou.xml"
+        self.rou_xml_path = os.path.join(self.dir_scenario, self.rou_xml_name)
+        flows =  []
+        net = sumolib.net.readNet(self.net_xml_path)
+        arterial_trajectory, _ = net.getFastestPath(net.getEdge("bottom0A0"),
+                                                    net.getEdge(f"A{self.n_intersections-1}top0"))
+        arterial_trajectory = [edge.getID() for edge in list(arterial_trajectory)]
+        flows.append((arterial_trajectory, self.arterial_demand / 3_600))
+        [flows.append(([f"left{i}A{i}", f"A{i}right{i}"], self.side_street_demand / 3_600))
+         for i in range(self.n_intersections)]
+
+        trips = []
+        for trajectory, demand in flows:
+            n_veh = int(np.round(demand * self.duration))
+            departure_times = np.linspace(0, self.duration, n_veh + 2)[1:-1]
+            [trips.append((departure_time, trajectory)) for departure_time in departure_times]
+        create_rou_xml_file(self.rou_xml_path, trips)
+
 
     def _generate_tls_settings(self):
         self.tls_add_xml_name = f"{self.name_scenario}.tls.add.xml"
@@ -444,7 +345,7 @@ class ArterialScenariosGenerator(ScenariosGenerator):
 
     def _generate_sumocfg(self):
         sumocfg_path = os.path.join(self.dir_scenario, f"{self.name_scenario}.sumocfg")
-        create_sumocfg_file(sumocfg_path, net_xml=self.net_xml_name, rou_xml=",".join(self.rou_xml_names),
+        create_sumocfg_file(sumocfg_path, net_xml=self.net_xml_name, rou_xml=self.rou_xml_name,
                             add_xml=self.tls_add_xml_name)
 
 
