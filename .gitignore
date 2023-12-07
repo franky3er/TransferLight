@@ -132,3 +132,6 @@ dmypy.json
 scenarios/*
 #results/*
 tmp/*
+
+# PyCharm 
+.idea/*
