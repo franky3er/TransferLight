@@ -31,7 +31,7 @@ This command will also display a list of possible agents that can be trained.
 
 ## Testing
 
-Models can be tested with the following command: 
+Models can be tested with the following command: <br>
 `python main.py test -a <AGENT> -c <CHECKPOINT> -s <SCENARIO> -d <DEVICE>`
 - `<AGENT` is a placeholder for the name of the agent(s) to test (multiple agents need to be separated by spaces). `ALL` will select all available agents.
 - `<CHECKPOINT>` is a placeholder for the path(s) to the model checkpoint(s) that shall be used for testing (multiple checkpoints need to be separated by spaces). `ALL` will select all available checkpoints for the specified agent(s). `BEST` will select the checkpoint file 'best.pt' in the agent's checkpoint directory (file needs to be created in advance).
@@ -48,7 +48,7 @@ This command will also display a list of available agents and scenarios.
 
 ## Demo
 
-A demo showcasing the effectiveness of a particular model can be run with the following command: 
+A demo showcasing the effectiveness of a particular model can be run with the following command: <br>
 `python main.py demo -a <AGENT> -c <CHECKPOINT> -s <SCENARIO> -d <DEVICE>`
 - `<AGENT` is a placeholder for the name of the agent.
 - `<CHECKPOINT>` is a placeholder for the path to the model checkpoint.
