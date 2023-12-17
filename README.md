@@ -44,11 +44,11 @@ For more information run the following help command:<br>
 `python main.py test -h`<br>
 This command will also display a list of available agents and scenarios.
 
-**Note**: All relevant test files are already available in this repository. A jupyter notebook comprising plots demonstrating the results is available under `notebooks/evaluation-results.ipynb`.
+**Note**: All relevant csv files were already generated and are already available in this repository. A jupyter notebook comprising plots demonstrating the evaluation results is available under `notebooks/evaluation-results.ipynb`.
 
 ## Demo
 
-A demo showcasing the effectiveness of a model can be run with the following command: 
+A demo showcasing the effectiveness of a particular model can be run with the following command: 
 `python main.py demo -a <AGENT> -c <CHECKPOINT> -s <SCENARIO> -d <DEVICE>`
 - `<AGENT` is a placeholder for the name of the agent.
 - `<CHECKPOINT>` is a placeholder for the path to the model checkpoint.
