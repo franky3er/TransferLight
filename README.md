@@ -44,7 +44,7 @@ For more information run the following help command:<br>
 `python main.py test -h`<br>
 This command will also display a list of available agents and scenarios.
 
-**Note**: All relevant csv files were already generated and are already available in this repository. A jupyter notebook comprising plots demonstrating the evaluation results is available under `notebooks/evaluation-results.ipynb`.
+**Note**: All relevant csv files were already generated and are available in this repository. A jupyter notebook comprising plots demonstrating the evaluation results is available under `notebooks/evaluation-results.ipynb`.
 
 ## Demo
 
