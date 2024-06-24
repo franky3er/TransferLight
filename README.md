@@ -2,6 +2,10 @@
 This repository comprises the code and evaluation results associated with my Master Thesis: 
 ***Domain Randomization of Deep Reinforcement Learning Environments for Zero-Shot Traffic Signal Control***.
 
+| Fixed Time (conventional)      | TransferLight (ours) |
+|--------------------------------| ---------- |
+| <img src="gifs/FixedTime.gif"> | <img src="gifs/TransferLight.gif"> |
+
 ## Setup
 To set up the environment follow the following steps: 
 1. [Install SUMO](https://sumo.dlr.de/docs/Installing/index.html)
